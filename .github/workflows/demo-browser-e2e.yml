@@ -14,7 +14,7 @@ on:
 
 jobs:
   browser-e2e:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
 
     defaults:
       run:
@@ -42,45 +42,15 @@ jobs:
         run: npm install
 
       - name: Start demo target
-        shell: powershell
+        shell: bash
         run: |
-          $log = Join-Path $env:RUNNER_TEMP "formwise-demo-e2e.log"
-
-          Start-Process `
-            -FilePath "cmd.exe" `
-            -ArgumentList "/c npm start > `"$log`" 2>&1" `
-            -WorkingDirectory "$env:GITHUB_WORKSPACE\demo-target-site" `
-            -WindowStyle Hidden
-
-          $ready = $false
-
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 1
-
-            try {
-              $connection = Test-NetConnection `
-                -ComputerName "127.0.0.1" `
-                -Port 5000 `
-                -WarningAction SilentlyContinue
-
-              if ($connection.TcpTestSucceeded) {
-                $ready = $true
-                break
-              }
-            } catch {
-              # Keep waiting for the demo server.
-            }
-          }
-
-          if (-not $ready) {
-            Write-Host "Demo target failed to start."
-            if (Test-Path $log) {
-              Get-Content $log
-            }
-            exit 1
-          }
-
-          Write-Host "Demo target is ready on port 5000."
+          npm start > "$RUNNER_TEMP/formwise-demo-e2e.log" 2>&1 &
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:5000/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/formwise-demo-e2e.log"
+          exit 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -98,12 +68,6 @@ jobs:
 
       - name: Demo target log
         if: always()
-        shell: powershell
+        shell: bash
         run: |
-          $log = Join-Path $env:RUNNER_TEMP "formwise-demo-e2e.log"
-
-          if (Test-Path $log) {
-            Get-Content $log
-          } else {
-            Write-Host "Demo target log not found."
-          }
+          test ! -f "$RUNNER_TEMP/formwise-demo-e2e.log" || cat "$RUNNER_TEMP/formwise-demo-e2e.log"

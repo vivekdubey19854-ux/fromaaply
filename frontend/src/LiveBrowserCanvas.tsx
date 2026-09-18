@@ -4,6 +4,7 @@ import { apiToWebSocketUrl, isHumanInputEnabled, scalePoint, type LiveControl, t
 type Props = {
   apiBase: string;
   userId: string;
+  accessToken?: string;
   sessionId: string;
   onStatus?: (message: string) => void;
   onHumanGate?: (gate: { reason: string; message: string; resume_allowed: boolean }) => void;
@@ -14,7 +15,7 @@ type Props = {
 type Frame = { data: string; width: number; height: number; seq: number };
 const MOUSE_MOVE_INTERVAL_MS = 33;
 
-export default function LiveBrowserCanvas({ apiBase, userId, sessionId, onStatus, onHumanGate, onLiveControl, resumeRequest = 0 }: Props) {
+export default function LiveBrowserCanvas({ apiBase, userId, accessToken = '', sessionId, onStatus, onHumanGate, onLiveControl, resumeRequest = 0 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const frameRef = useRef<Frame | null>(null);
@@ -52,7 +53,10 @@ export default function LiveBrowserCanvas({ apiBase, userId, sessionId, onStatus
   const connect = useCallback(async () => {
     setError(null); setPhase('Requesting secure live capability…');
     try {
-      const response = await fetch(`${apiBase}/v1/browser/sessions/${sessionId}/live-token`, { method: 'POST', headers: { 'X-User-ID': userId } });
+      const authHeaders: Record<string, string> = accessToken
+        ? { Authorization: `Bearer ${accessToken}` }
+        : { 'X-User-ID': userId };
+      const response = await fetch(`${apiBase}/v1/browser/sessions/${sessionId}/live-token`, { method: 'POST', headers: authHeaders });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || `Live token request failed (${response.status})`);
       const socket = new WebSocket(apiToWebSocketUrl(apiBase, sessionId, payload.live_token)); socketRef.current = socket;
@@ -76,7 +80,7 @@ export default function LiveBrowserCanvas({ apiBase, userId, sessionId, onStatus
       socket.onerror = () => { setError('Live browser connection error.'); onStatus?.('Live browser connection error.'); };
       socket.onclose = () => { setConnected(false); publishControl('locked', 'ai', false); setPhase('Live browser disconnected'); };
     } catch (err) { const message = err instanceof Error ? err.message : 'Unable to connect to live browser.'; setError(message); setPhase('Live browser unavailable'); onStatus?.(message); }
-  }, [apiBase, onHumanGate, onLiveControl, onStatus, publishControl, scheduleFrameDraw, sessionId, userId]);
+  }, [accessToken, apiBase, onHumanGate, onLiveControl, onStatus, publishControl, scheduleFrameDraw, sessionId, userId]);
 
   useEffect(() => { void connect(); return () => { socketRef.current?.close(1000, 'component unmounted'); if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); }; }, [connect]);
 

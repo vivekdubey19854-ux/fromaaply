@@ -116,7 +116,7 @@ function App() {
     if (view === 'knowledge') return <MasterKnowledgeScreen profile={profile} education={education} addresses={addresses} />;
     if (view === 'billing') return <BillingLogsScreen billing={billing} busy={busy} onRefresh={loadBilling} />;
     if (view === 'human') return <HumanGatewayScreen gate={activeGate} onClose={() => setView('core')} />;
-    return <CoreWorkspaceScreen apiBase={API} userId={uid} workflow={workflow} instruction={instruction} setInstruction={setInstruction} busy={busy} status={status} docs={docs} onStart={start} onConfirm={confirm} onOpen={openApp} onUpload={upload} onExtract={extract} onApprove={approveField} onFill={fill} onFinalApproval={finalApproval} onFinalSubmit={finalSubmit} approval={approval} screenshot={screenshot} onHumanGate={onHumanGate} onLiveControl={onLiveControl} resumeRequest={resumeRequest} />;
+    return <CoreWorkspaceScreen apiBase={API} userId={uid} accessToken={accessToken} workflow={workflow} instruction={instruction} setInstruction={setInstruction} busy={busy} status={status} docs={docs} onStart={start} onConfirm={confirm} onOpen={openApp} onUpload={upload} onExtract={extract} onApprove={approveField} onFill={fill} onFinalApproval={finalApproval} onFinalSubmit={finalSubmit} approval={approval} screenshot={screenshot} onHumanGate={onHumanGate} onLiveControl={onLiveControl} resumeRequest={resumeRequest} />;
   };
 
   return <StitchShell view={view} onNavigate={setView} status={status}>

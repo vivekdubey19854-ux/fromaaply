@@ -27,7 +27,10 @@ from app.auth_routes import router as auth_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_production_security()
-    Base.metadata.create_all(bind=engine)
+    # Alembic is the production schema authority. Keep create_all only for
+    # local development and tests; production startup must not mutate schema.
+    if settings.environment != "production":
+        Base.metadata.create_all(bind=engine)
     yield
     await close_all_sessions()
 

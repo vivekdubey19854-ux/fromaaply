@@ -2,7 +2,7 @@ import React from 'react';
 import LiveBrowserCanvas from '../LiveBrowserCanvas.tsx';
 
 export default function CoreWorkspaceScreen({
-  apiBase, userId, workflow, instruction, setInstruction, busy, status, docs,
+  apiBase, userId, accessToken, workflow, instruction, setInstruction, busy, status, docs,
   onStart, onConfirm, onOpen, onUpload, onExtract, onApprove, onFill, onFinalApproval, onFinalSubmit,
   approval, screenshot, onHumanGate, onLiveControl, resumeRequest,
 }) {
@@ -27,7 +27,7 @@ export default function CoreWorkspaceScreen({
 
     <section className="fw-center-stage">
       <div className="fw-panel-title"><div><span className="fw-kicker">AGENT // RUNNING</span><b>{workflow?.session_id ? `TARGET SESSION #${workflow.session_id}` : 'TARGET SESSION // NOT STARTED'}</b></div><span className="fw-safe-pill">⌁ Isolated headless browser</span></div>
-      {workflow?.session_id ? <LiveBrowserCanvas apiBase={apiBase} userId={userId} sessionId={workflow.session_id} onStatus={() => {}} onHumanGate={onHumanGate} onLiveControl={onLiveControl} resumeRequest={resumeRequest} /> : <div className="fw-empty-browser"><div>FORM FILL VIEWPORT</div><h2>Start a workflow to attach the secure live browser.</h2><p>PR #12/#13 guardrails remain authoritative: AI input stays locked unless backend broadcasts an approved human gate.</p></div>}
+      {workflow?.session_id ? <LiveBrowserCanvas apiBase={apiBase} userId={userId} accessToken={accessToken} sessionId={workflow.session_id} onStatus={() => {}} onHumanGate={onHumanGate} onLiveControl={onLiveControl} resumeRequest={resumeRequest} /> : <div className="fw-empty-browser"><div>FORM FILL VIEWPORT</div><h2>Start a workflow to attach the secure live browser.</h2><p>PR #12/#13 guardrails remain authoritative: AI input stays locked unless backend broadcasts an approved human gate.</p></div>}
 
       {workflow?.state === 'research_ready' && <div className="fw-inline-status"><b>Research ready for human review.</b><p>{facts.application_window || 'Application window not extracted'} · Last date: {facts.last_date || 'Not extracted'} · Fee: {facts.fee_rupees ? `₹${facts.fee_rupees}` : 'Not extracted'}</p><div><button onClick={() => onConfirm(true)} disabled={busy}>I reviewed it — continue</button><button onClick={() => onConfirm(false)} disabled={busy}>Cancel</button></div></div>}
       {workflow?.state === 'documents_missing' && <div className="fw-inline-status"><b>Document checklist requires attention.</b><pre>{JSON.stringify(workflow.document_check || {}, null, 2)}</pre><button onClick={() => onConfirm(true)} disabled={busy}>Re-check checklist</button></div>}

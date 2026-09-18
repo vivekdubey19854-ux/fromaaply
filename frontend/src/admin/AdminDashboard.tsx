@@ -6,42 +6,19 @@ type Provider = { name: string; short: string; tier: string; masked: string; lat
 type UserRow = { id: string; name: string; plan: string; credits: number; status: string; spend: string; lastJob: string };
 
 const API = localStorage.getItem('formwise_api') || 'http://localhost:8000';
-const adminToken = () => localStorage.getItem('formwise_admin_token') || '';
+const adminToken = () => localStorage.getItem('formwise_access_token') || localStorage.getItem('formwise_admin_token') || '';
 
 const PROVIDERS: Provider[] = [
-  ['OpenAI','OA','GPT-4o / o1','sk-proj-••••••••••w9Z2','142ms',true],
-  ['Google Gemini','GM','1.5 Pro / Flash','AIzaSy••••••••••8kL0','98ms',true],
-  ['Anthropic','AN','Claude 3.5 Sonnet / Opus','sk-ant-••••••••••7F1a','165ms',true],
-  ['AWS Bedrock','AWS','Claude / Llama / Titan','AKIA••••••••••92QX','110ms',true],
-  ['Groq','GQ','Llama 3.3 70B / Mixtral','gsk_••••••••••p41M','42ms',true],
-  ['DeepSeek','DS','R1 / V3','sk-ds-••••••••••01Ab','210ms',true],
-  ['Perplexity AI','PX','Sonar Pro Search','pplx-••••••••••44Xc','180ms',true],
-  ['Base64.ai','B64','Zero-Footprint OCR','b64_live_••••••99Jk','88ms',true],
-  ['OpenRouter','OR','Universal Gateway','', '—',false],
-  ['xAI Grok','XG','Grok 4 / Fast','xai-••••••••••2Qm8','121ms',true],
-  ['Mistral','MI','Large / Medium','mistral-••••••••••9T2p','151ms',true],
-  ['Cohere','CO','Command R+ / Embed','co-••••••••••4Kq1','134ms',true],
-  ['Fireworks AI','FW','DeepSeek / Llama','fw-••••••••••7Gd4','73ms',true],
-  ['Cerebras','CB','Llama / Qwen','csk-••••••••••3Pz8','51ms',true],
-  ['Hugging Face','HF','Inference Endpoints','hf_••••••••••6Mb2','164ms',true],
-  ['Together AI','TG','OpenAI-Compatible','tg-••••••••••8Ld1','95ms',true],
-  ['Azure Document AI','AZ','Document Intelligence','az-••••••••••5Na0','126ms',true],
-  ['Ollama','OL','Self-Hosted Local','local••••••••••','24ms',true],
-  ['Cloudflare AI','CF','Workers AI','cf-••••••••••1Vb7','64ms',true],
-  ['AI21 Labs','AI','Jamba / Jurassic','ai21-••••••••••6Ks4','173ms',true],
-  ['Voyage AI','VO','Embeddings / Rerank','voy-••••••••••9Hs1','147ms',true],
-  ['Jina AI','JI','Reader / Embeddings','jina-••••••••••2Fx9','132ms',true],
-  ['NVIDIA NIM','NV','Llama / Nemotron','nim-••••••••••4Rt6','91ms',true],
-  ['Meta Llama API','LM','Llama Hosted','llama-••••••••••5Qa2','106ms',true],
+  ['OpenAI','OA','OpenAI-compatible','', '—',false],
+  ['Google Gemini','GM','Google Gemini','', '—',false],
+  ['Anthropic','AN','Anthropic','', '—',false],
+  ['Groq','GQ','OpenAI-compatible','', '—',false],
+  ['OpenRouter','OR','OpenAI-compatible','', '—',false],
+  ['Mistral','MI','OpenAI-compatible','', '—',false],
+  ['Ollama','OL','Self-hosted local','', '—',false],
 ].map(([name,short,tier,masked,latency,configured]) => ({name,short,tier,masked,latency,configured}));
 
-const STORAGE_NODES = [
-  { name: 'Oracle Cloud Free Tier', bucket: 'fw-canonical-vault-01', ping: '28ms', status: 'ACTIVE', priority: 1 },
-  { name: 'IBM Cloud Object Storage', bucket: 'ibm-fw-audit-archive', ping: '44ms', status: 'ACTIVE', priority: 2 },
-  { name: 'Cloudflare R2', bucket: 'r2-form-assets-live', ping: '12ms', status: 'ACTIVE', priority: 3 },
-  { name: 'Backblaze B2', bucket: 'b2-raw-dom-snapshots', ping: '36ms', status: 'ACTIVE', priority: 4 },
-  { name: 'Supabase Storage', bucket: 'supa-ephemeral-tokens', ping: '19ms', status: 'ACTIVE', priority: 5 },
-];
+const STORAGE_NODES: { name:string; bucket:string; ping:string; status:string; priority:number }[] = [];
 
 const AUTH_GATEWAYS = [
   ['Phone OTP Gateway','Firebase SDK',true],
@@ -50,13 +27,7 @@ const AUTH_GATEWAYS = [
   ['WhatsApp OTP Gateway','Meta Cloud API',false],
 ];
 
-const INITIAL_USERS: UserRow[] = [
-  { id:'USR-92105', name:'Priya Sundaram', plan:'Enterprise', credits:840, status:'ACTIVE', spend:'₹18,420', lastJob:'California DMV Real ID' },
-  { id:'USR-84192', name:'Arjun Mehta', plan:'Pro', credits:410, status:'ACTIVE', spend:'₹9,840', lastJob:'USCIS I-9 Form Upload' },
-  { id:'USR-77319', name:'Rhea Kapoor', plan:'Premium', credits:1220, status:'ACTIVE', spend:'₹12,440', lastJob:'IRS Tax Stamp Verification' },
-  { id:'USR-66112', name:'Kabir Sharma', plan:'Basic', credits:94, status:'WATCH', spend:'₹1,920', lastJob:'Vendor Onboarding Flow v4.2' },
-  { id:'USR-54108', name:'Neha Verma', plan:'Pro', credits:532, status:'ACTIVE', spend:'₹7,680', lastJob:'Health Insurance Enrollment' },
-];
+const INITIAL_USERS: UserRow[] = [];
 
 const formatInr = (value: number) => new Intl.NumberFormat('en-IN', { style:'currency', currency:'INR', maximumFractionDigits:0 }).format(value);
 
@@ -97,13 +68,8 @@ export default function AdminDashboard() {
   const [keyValue, setKeyValue] = useState('');
   const [users, setUsers] = useState(INITIAL_USERS);
   const [busyAction, setBusyAction] = useState('');
-  const [status, setStatus] = useState('SYSTEM READY · ROOT ENCLAVE');
-  const [logs, setLogs] = useState<string[]>([
-    '[14:32:04] ADMIN: Change credit price to ₹3 and disable DIWALI50 coupon',
-    '[14:32:05] CO-PILOT: ✓ Executed: credit exchange adjusted; DIWALI50 marked revoked.',
-    '[14:38:19] ADMIN: Run synthetic integrity check on Groq and Claude 3.5 providers',
-    '[14:38:20] CO-PILOT: ✓ Groq LPU response verified (42ms). Claude verified (165ms).',
-  ]);
+  const [status, setStatus] = useState('SYSTEM READY · LIVE DATA REQUIRED');
+  const [logs, setLogs] = useState<string[]>(['[SYSTEM] No synthetic activity loaded. Connect the admin API to view audit events.']);
   const [command, setCommand] = useState('');
   const [pricing, setPricing] = useState({ credits:'1', formCost:'3', refund:'5', discount:'15' });
   const [authEnabled, setAuthEnabled] = useState(AUTH_GATEWAYS.map(x => Boolean(x[2])));
@@ -202,11 +168,11 @@ export default function AdminDashboard() {
 
   return <div className="fw-admin min-h-screen bg-[#0e0e0e] text-[#e5e2e1] font-sans">
     <header className="fw-admin-header">
-      <div className="fw-admin-brand"><div className="fw-admin-logo">↦</div><div><div className="fw-admin-brand-name">FORMWISE <span>ENTERPRISE AI</span></div><div className="fw-admin-meta"><i /> Command & Control / Super Admin · ROOT_SYS 0x00_SUPER</div></div></div>
+      <div className="fw-admin-brand"><div className="fw-admin-logo">↦</div><div><div className="fw-admin-brand-name">FORMWISE <span>ENTERPRISE AI</span></div><div className="fw-admin-meta"><i /> Command & Control / Super Admin · server-authorized</div></div></div>
       <div className="fw-admin-controls">
         <div className="fw-header-control fw-header-danger"><span>EMERGENCY FREEZE</span><Toggle checked={freeze} onChange={setFreeze} danger /></div>
         <div className="fw-header-control"><span>MAINTENANCE MODE</span><Toggle checked={maintenance} onChange={toggleMaintenance} /></div>
-        <div className="fw-admin-status"><i /> CLUSTER: HEALTHY <b>18ms p95</b></div>
+        <div className="fw-admin-status"><i /> HEALTH STATUS <b>API-REPORTED</b></div>
       </div>
     </header>
 
