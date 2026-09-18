@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     browser_max_pages_per_session: int = 3
     browser_screenshot_enabled: bool = True
     browser_block_private_networks: bool = True
-    browser_allow_local_demo_target: bool = False
+    # Development-only exception is still restricted to localhost:5000 by
+    # browser_agent._is_local_demo_url; production deployments must override
+    # this to false and validate_production_security enforces that boundary.
+    browser_allow_local_demo_target: bool = True
     browser_demo_target_port: int = 5000
     browser_use_enabled: bool = False
     browser_use_model: str = "gpt-5.6-luna"
