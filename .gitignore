@@ -1,0 +1,20 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Local development state
+*.db
+*.sqlite3
+private_storage/
+
+# Node dependencies and build caches
+node_modules/
+.npm/
+.vite/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
