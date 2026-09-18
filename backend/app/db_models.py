@@ -9,6 +9,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+class AuthUserRecord(Base):
+    __tablename__ = "auth_users"
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    role: Mapped[str] = mapped_column(String(30), default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class ProfileRecord(Base):
     __tablename__ = "profiles"
     user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
