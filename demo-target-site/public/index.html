@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Formwise Demo Application</title>
+  <style>
+    :root{--bg:#f4f7fb;--card:#fff;--text:#172033;--muted:#667085;--line:#d9e0ea;--primary:#315efb;--primary-dark:#2349d8;--success:#16865b;--warning:#b76b00;--soft-blue:#eef3ff;--soft-green:#eaf8f2;--soft-yellow:#fff7e8;--shadow:0 18px 50px rgba(24,39,75,.10)}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,#eef3fb 0,#f7f9fc 280px,var(--bg) 100%);font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;color:var(--text)}
+    .shell{width:min(900px,calc(100% - 32px));margin:36px auto 60px}
+    .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:20px;letter-spacing:-.3px}
+    .brand-mark{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--primary),#6d8cff);display:grid;place-items:center;color:#fff;font-weight:900;box-shadow:0 8px 18px rgba(49,94,251,.25)}
+    .badge{font-size:12px;font-weight:700;color:#3155bd;background:var(--soft-blue);border:1px solid #d6e0ff;padding:7px 11px;border-radius:999px}
+    .hero{background:var(--card);border:1px solid #e1e7f0;border-radius:22px;padding:28px 30px;box-shadow:var(--shadow);margin-bottom:18px}
+    .hero h1{margin:0 0 7px;font-size:30px;line-height:1.15;letter-spacing:-.8px}
+    .hero p{margin:0;color:var(--muted);font-size:14px;line-height:1.6}
+    .progress-row{display:flex;align-items:center;justify-content:space-between;margin-top:22px;margin-bottom:9px;font-size:12px;font-weight:700}
+    .progress-track{height:8px;background:#e8edf5;border-radius:99px;overflow:hidden}.progress-fill{width:60%;height:100%;background:linear-gradient(90deg,var(--primary),#6d8cff);border-radius:99px}
+    .demo-note{display:none;margin-top:18px;padding:12px 14px;border-radius:12px;background:#f0f5ff;border:1px solid #cad8ff;color:#3155bd;font-size:12px;line-height:1.5}
+    .demo-note strong{font-weight:800}
+    form{background:var(--card);border:1px solid #e1e7f0;border-radius:22px;padding:28px 30px;box-shadow:var(--shadow)}
+    .section{padding:0 0 25px;margin-bottom:25px;border-bottom:1px solid #e8edf3}.section:last-of-type{border-bottom:0;margin-bottom:0;padding-bottom:8px}
+    .section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;margin-bottom:18px}.section-title{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:800}.section-sub{font-size:12px;color:var(--muted);margin-top:4px}
+    .icon{width:32px;height:32px;border-radius:9px;background:var(--soft-blue);display:grid;place-items:center;font-size:16px}
+    .section-status{font-size:11px;font-weight:700;color:var(--success);background:var(--soft-green);border:1px solid #c9eadc;border-radius:999px;padding:6px 9px;white-space:nowrap}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field.full{grid-column:1/-1}
+    label{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 7px;font-size:12px;font-weight:750;color:#344054}
+    input{width:100%;height:45px;padding:0 13px;border:1px solid var(--line);border-radius:10px;background:#fbfcfe;color:var(--text);font:500 14px Inter,Segoe UI,Arial,sans-serif;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
+    input:focus{border-color:#8da5ff;box-shadow:0 0 0 4px rgba(49,94,251,.10);background:#fff}
+    .field-hint{font-size:11px;color:#98a2b3;margin-top:6px}
+    .sensitive{font-size:10px;color:var(--warning);background:var(--soft-yellow);border:1px solid #f5dfb7;border-radius:999px;padding:4px 7px;font-weight:750}
+    .upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .upload-card{border:1px dashed #cbd4e1;border-radius:13px;padding:15px;background:#fbfcfe}.upload-card label{margin-bottom:9px}
+    input[type=file]{height:auto;padding:9px;font-size:12px;background:#fff}
+    .security-box{background:#fafbfe;border:1px solid #e2e7ef;border-radius:14px;padding:16px}.security-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .captcha{height:45px;display:flex;align-items:center;padding:0 14px;border-radius:10px;background:#eef0f4;border:1px solid #d8dee8;font:800 20px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:6px;color:#111827}
+    .otp-line{display:flex;gap:9px}.otp-line input{flex:1}.secondary-btn{height:45px;padding:0 15px;border:1px solid #cbd5e1;background:#fff;border-radius:10px;font-weight:750;color:#344054;cursor:pointer}.secondary-btn:hover{background:#f7f9fc}
+    .review{display:flex;gap:11px;align-items:flex-start;padding:14px;border-radius:13px;background:#fff8eb;border:1px solid #f1ddb8;color:#7a4d00;font-size:12px;line-height:1.55}.review-icon{font-size:17px}
+    .actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:20px;padding-top:20px;border-top:1px solid #e8edf3}.manual-note{font-size:11px;color:var(--muted);margin-right:auto}
+    button#submit{height:45px;padding:0 21px;border:0;border-radius:10px;background:linear-gradient(135deg,var(--primary),#5275ff);color:#fff;font-weight:800;cursor:pointer;box-shadow:0 7px 18px rgba(49,94,251,.22)}
+    button#submit:hover{background:linear-gradient(135deg,var(--primary-dark),#4569ee)}
+    @media(max-width:680px){.shell{width:min(100% - 20px,900px);margin-top:18px}.hero,form{padding:22px 18px;border-radius:17px}.hero h1{font-size:25px}.grid,.upload-grid,.security-row{grid-template-columns:1fr}.field.full{grid-column:auto}.topbar{gap:10px}.badge{display:none}.actions{flex-wrap:wrap}.manual-note{width:100%}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topbar">
+      <div class="brand"><div class="brand-mark">F</div><span>FORMwise</span></div>
+      <div class="badge">LOCAL DEMO • SAFE MODE</div>
+    </div>
+
+    <section class="hero">
+      <h1>Application Form</h1>
+      <p>This local-only target is for safe end-to-end testing of Formwise's form mapping and self-healing workflow.</p>
+      <div class="progress-row"><span>Application progress</span><span>60% complete</span></div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+      <p id="self-heal-note" class="demo-note"><strong>SELF-HEALING MODE:</strong> machine IDs, names and machine hints were intentionally changed while visible labels and accessibility context remain stable.</p>
+    </section>
+
+    <form method="post" action="/submit" enctype="multipart/form-data">
+      <section class="section">
+        <div class="section-head">
+          <div><div class="section-title"><span class="icon">👤</span>Personal Information</div><div class="section-sub">Enter the applicant's basic details.</div></div>
+          <span class="section-status">✓ Ready</span>
+        </div>
+        <div class="grid">
+          <div class="field full"><label>Full Name <span class="sensitive">Sensitive</span></label><input id="fullName" name="fullName" autocomplete="name" aria-label="Full Name"><div class="field-hint">As shown on your official document</div></div>
+          <div class="field"><label>Date of Birth <span class="sensitive">Sensitive</span></label><input id="dob" name="dob" type="date" autocomplete="bday" aria-label="Date of Birth"></div>
+          <div class="field"><label>Email <span class="sensitive">Sensitive</span></label><input id="email" name="email" type="email" autocomplete="email" aria-label="Email"></div>
+          <div class="field full"><label>Mobile Number <span class="sensitive">Sensitive</span></label><input id="mobile" name="mobile" type="tel" autocomplete="tel" aria-label="Mobile Number"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div><div class="section-title"><span class="icon">📎</span>Documents</div><div class="section-sub">Upload the required application documents.</div></div>
+        </div>
+        <div class="upload-grid">
+          <div class="upload-card"><label>Upload Photo</label><input name="photo" type="file"><div class="field-hint">JPG or PNG • demo only</div></div>
+          <div class="upload-card"><label>Upload Signature</label><input name="signature" type="file"><div class="field-hint">JPG or PNG • demo only</div></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div><div class="section-title"><span class="icon">🛡️</span>Security Verification</div><div class="section-sub">These verification steps remain under human control.</div></div>
+          <span class="section-status" style="color:#9a5b00;background:#fff7e8;border-color:#f2dfba">Human required</span>
+        </div>
+        <div class="security-box">
+          <div class="security-row">
+            <div><label>Captcha</label><div class="captcha">7 X 9 K 2</div></div>
+            <div><label>Captcha Response</label><input name="captcha" autocomplete="off" aria-label="Captcha"></div>
+          </div>
+          <div style="height:16px"></div>
+          <div><label>OTP <span class="sensitive">Sensitive</span></label><div class="otp-line"><input name="otp" inputmode="numeric" autocomplete="one-time-code" aria-label="OTP"><button type="button" class="secondary-btn" onclick="sendOtp()">Send OTP</button></div></div>
+        </div>
+      </section>
+
+      <div class="review"><span class="review-icon">⚠️</span><div><strong>Final review required.</strong><br>Formwise may fill approved values, but CAPTCHA, OTP and final submission remain human-controlled. Review every field before submitting.</div></div>
+      <div class="actions">
+        <span class="manual-note">🔒 Final submission is never automated in this demo.</span>
+        <button id="submit" type="submit">Review &amp; Submit Application</button>
+      </div>
+    </form>
+  </main>
+
+  <script>
+    async function sendOtp(){await fetch('/generate-otp');alert('Demo OTP generated. Check the demo server console.');}
+    if(new URLSearchParams(location.search).get('self_heal')==='1'){
+      document.getElementById('self-heal-note').style.display='block';
+      const mutations={
+        fullName:['fw_runtime_name_91','fw_runtime_id_91','text','runtime-name'],
+        dob:['fw_runtime_birth_42','fw_runtime_id_42','text','runtime-birth'],
+        email:['fw_runtime_contact_73','fw_runtime_id_73','text','runtime-contact'],
+        mobile:['fw_runtime_phone_64','fw_runtime_id_64','text','runtime-phone']
+      };
+      for(const [id,[name,newId,newType,newAutocomplete]] of Object.entries(mutations)){
+        const el=document.getElementById(id);
+        el.name=name;
+        el.id=newId;
+        el.type=newType;
+        el.setAttribute('autocomplete',newAutocomplete);
+      }
+    }
+  </script>
+</body>
+</html>

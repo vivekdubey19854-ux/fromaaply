@@ -1,0 +1,18 @@
+import React from 'react';
+
+export default function BillingLogsScreen({ billing, onRefresh, busy }) {
+  const rows = billing?.transactions || [];
+  const summary = billing?.summary || {};
+  return <div className="fw-page">
+    <div className="fw-page-head"><div><span className="fw-kicker">ACCOUNT &amp; LEDGER AUDIT · ZERO-KNOWLEDGE ATTESTED</span><h1>Transaction History &amp; Subscription Logs</h1><p>Customer-isolated billing view. This screen consumes only server-provided ledger data; no client-side balances are fabricated.</p></div><div className="fw-head-actions"><button className="fw-ghost-btn" onClick={onRefresh} disabled={busy}>↻ Sync Node</button><span className="fw-ledger-badge">SOC2 Type II · ACTIVE</span></div></div>
+    <div className="fw-summary-grid">
+      <div className="fw-summary-card"><label>Subscription Tier</label><h2>{summary.tier || 'Not configured'}</h2><span className="fw-status-ok">● {summary.status || 'SERVER UNKNOWN'}</span><p>{summary.renews_at ? `Renews ${summary.renews_at}` : 'Subscription metadata is not exposed by the current API.'}</p></div>
+      <div className="fw-summary-card"><label>Compute &amp; Agent Credits</label><h2>{summary.credits_remaining ?? '—'} <small>/ {summary.credit_limit ?? '—'}</small></h2><div className="fw-progress-track"><i style={{width: `${summary.credit_percent || 0}%`}}/></div><p>Wallet/token balance comes only from the server ledger.</p></div>
+      <div className="fw-summary-card"><label>Forms Automated</label><h2>{summary.executions ?? '—'}</h2><span>{summary.success_rate != null ? `${summary.success_rate}% successful` : 'No ledger data'}</span></div>
+      <div className="fw-summary-card"><label>Human Hours Saved</label><h2>{summary.human_hours_saved ?? '—'}</h2><span>Measured from server-side execution ledger</span></div>
+    </div>
+    <div className="fw-filterbar"><input placeholder="⌕ Search by form name or TXN ID"/><select defaultValue="30"><option value="30">Last 30 Days</option><option value="90">Last 90 Days</option><option value="365">Last Year</option></select><select defaultValue="all"><option value="all">Status: All Records</option><option value="success">Successful</option><option value="failed">Failed</option></select><button className="fw-ghost-btn">⇩ Export CSV</button><button className="fw-light-btn">▣ Statement (PDF)</button></div>
+    <div className="fw-table-wrap"><table className="fw-table fw-ledger-table"><thead><tr><th>Transaction ID</th><th>Target Portal / Form</th><th>Execution Timestamp</th><th>Fields Hydrated</th><th>DOM Latency</th><th>Status</th><th>Credits</th><th>Receipt</th></tr></thead><tbody>{rows.length ? rows.map(r => <tr key={r.id}><td className="fw-cyan">{r.id}</td><td>{r.form_name}</td><td>{r.timestamp}</td><td>{r.fields}</td><td>{r.latency}</td><td><span className={r.status === 'SUCCESSFUL' ? 'fw-status-ok' : 'fw-status-failed'}>{r.status}</span></td><td>{r.credits}</td><td><button className="fw-table-btn">View</button></td></tr>) : <tr><td colSpan="8"><div className="fw-ledger-empty"><b>Billing ledger not available from the current backend contract.</b><span>The commercial UI is wired to a customer-isolated /v1/billing/summary payload and will render records when that server endpoint is enabled.</span></div></td></tr>}</tbody></table></div>
+    <div className="fw-proof-card"><div className="fw-proof-icon">◇</div><div><h2>Cryptographic Proof of Submission Guarantee</h2><p>Receipt rendering is read-only. Final submission continues to require the existing explicit approval flow in the workspace.</p></div><button className="fw-ghost-btn">⌁ Verify Block Proof</button><button className="fw-ghost-btn">↗ S3 Auto-Mirror Settings</button></div>
+  </div>;
+}

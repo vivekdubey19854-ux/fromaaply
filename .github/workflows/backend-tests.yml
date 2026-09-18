@@ -1,0 +1,80 @@
+name: Backend Tests
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "demo-target-site/**"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "demo-target-site/**"
+      - ".github/workflows/backend-tests.yml"
+
+jobs:
+  test:
+    runs-on: [self-hosted, Windows, X64]
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      PYTHONPATH: .
+      FORMWISE_BROWSER_HEADLESS: "true"
+      FORMWISE_BROWSER_ALLOW_LOCAL_DEMO_TARGET: "true"
+      FORMWISE_BROWSER_USE_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install demo target
+        working-directory: demo-target-site
+        run: npm install
+
+      - name: Start demo target
+        shell: powershell
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "formwise-demo.log"
+          Start-Process `
+            -FilePath "cmd.exe" `
+            -ArgumentList "/c npm start > `"$log`" 2>&1" `
+            -WorkingDirectory "$env:GITHUB_WORKSPACE\demo-target-site" `
+            -WindowStyle Hidden
+
+          Start-Sleep -Seconds 5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Install Chromium
+        run: python -m playwright install chromium
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Check migrations
+        run: alembic upgrade head
+
+      - name: Demo target log
+        if: always()
+        shell: powershell
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "formwise-demo.log"
+          if (Test-Path $log) {
+            Get-Content $log
+          } else {
+            Write-Host "Demo target log not found."
+          }

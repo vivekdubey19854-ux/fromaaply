@@ -1,0 +1,9 @@
+# Database migrations
+
+Run from `backend/`:
+
+```bash
+alembic upgrade head
+```
+
+The initial migration creates the profile, address, education, document and audit-log tables.
