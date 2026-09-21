@@ -9,4 +9,4 @@ def test_alembic_has_one_head_after_phase5a_merge():
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "migrations"))
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["0011_auth_action_tokens"]
+    assert heads == ["0012_durable_task_runtime"]

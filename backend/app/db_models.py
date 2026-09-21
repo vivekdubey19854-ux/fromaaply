@@ -116,3 +116,82 @@ class AuditLogRecord(Base):
     resource_id: Mapped[str | None] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     details: Mapped[str | None] = mapped_column(Text)
+
+
+class FormTaskRecord(Base):
+    __tablename__ = "form_tasks"
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    website_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    state: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    current_step: Mapped[str | None] = mapped_column(String(100))
+    target_url: Mapped[str | None] = mapped_column(String(500))
+    browser_session_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(1000))
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True, index=True)
+    resume_reference: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class TaskStepRecord(Base):
+    __tablename__ = "task_steps"
+    step_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    task_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    step_name: Mapped[str] = mapped_column(String(100))
+    state: Mapped[str] = mapped_column(String(30), default="pending")
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BrowserSessionRecord(Base):
+    __tablename__ = "browser_sessions"
+    browser_session_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    state: Mapped[str] = mapped_column(String(30), default="created")
+    target_url: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class BrowserSessionEventRecord(Base):
+    __tablename__ = "browser_session_events"
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    browser_session_id: Mapped[str] = mapped_column(String(100), index=True)
+    task_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(80))
+    details: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WorkflowEventRecord(Base):
+    __tablename__ = "workflow_events"
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    task_id: Mapped[str] = mapped_column(String(36), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(80))
+    from_state: Mapped[str | None] = mapped_column(String(40))
+    to_state: Mapped[str | None] = mapped_column(String(40))
+    details: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class TaskLockRecord(Base):
+    __tablename__ = "task_locks"
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(120))
+    locked_until: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

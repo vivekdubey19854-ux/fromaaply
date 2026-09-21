@@ -22,6 +22,7 @@ from app import db_models  # noqa: F401
 from app.payment_routes import router as payment_router
 from app.universal_research_routes import router as universal_research_router
 from app.auth_routes import router as auth_router
+from app.task_routes import router as task_router
 
 
 @asynccontextmanager
@@ -63,6 +64,7 @@ app.include_router(universal_research_router)
 app.include_router(auth_router)
 app.include_router(payment_router)
 app.include_router(admin_router)
+app.include_router(task_router)
 
 
 @app.get("/health", tags=["system"])

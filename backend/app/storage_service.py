@@ -62,6 +62,31 @@ class StorageServiceAdapter:
                 self._mark_down(node.node_id)
         raise StorageUploadError("all configured storage nodes failed or timed out") from (failures[-1] if failures else None)
 
+    def presigned_download_url(self, *, object_key: str, expires_seconds: int = 300) -> str:
+        """Return a short-lived private URL; never construct a permanent public URL."""
+        if not object_key or object_key.startswith("/"):
+            raise ValueError("object_key must be a relative object key")
+        if not 30 <= expires_seconds <= 900:
+            raise ValueError("expires_seconds must be between 30 and 900")
+        nodes = self._lock_active_nodes()
+        if not nodes:
+            raise StorageUploadError("no healthy storage node is configured")
+        failures: list[Exception] = []
+        for node in nodes:
+            try:
+                credentials = dict(self.credential_decryptor(node.credentials))
+                required = ("endpoint_url", "bucket_name", "access_key_id", "secret_access_key")
+                missing = [key for key in required if not credentials.get(key)]
+                if missing:
+                    raise StorageUploadError(f"storage node {node.provider_name} is not configured: {', '.join(missing)}")
+                client = self.client_factory("s3", endpoint_url=credentials["endpoint_url"], region_name=credentials.get("region_name"), aws_access_key_id=credentials["access_key_id"], aws_secret_access_key=credentials["secret_access_key"], config=Config(signature_version="s3v4"))
+                return str(client.generate_presigned_url("get_object", Params={"Bucket": credentials["bucket_name"], "Key": object_key}, ExpiresIn=expires_seconds))
+            except NETWORK_ERRORS as exc:
+                failures.append(exc)
+            except (BotoCoreError, ClientError) as exc:
+                failures.append(exc)
+        raise StorageUploadError("no healthy storage node could create a signed URL") from (failures[-1] if failures else None)
+
     def _lock_active_nodes(self) -> list[StorageNode]:
         result = self.db.execute(text("SELECT id, provider_name, priority, status, credentials FROM multi_cloud_storage_nodes WHERE status = 'UP' ORDER BY priority ASC FOR UPDATE"))
         return [StorageNode(str(row.id), str(row.provider_name), int(row.priority), str(row.status), row.credentials or {}) for row in result.fetchall()]

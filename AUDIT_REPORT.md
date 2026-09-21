@@ -8,7 +8,7 @@
 
 The repository contains a substantial working foundation for a secure form-assistance product. Authentication, token revocation, one-time password-reset and verification tokens, private document handling, OCR/verified-data workflows, server-side browser safety, live browser frame streaming, AI failover adapters, payment webhook idempotency, and an admin website registry are implemented.
 
-The repository is **not yet a complete production universal portal**. The largest remaining gaps are operational rather than cosmetic: production deployment, durable browser workers, real provider credentials, storage-provider routing, website-specific registry data, complete admin API wiring, usage/cost accounting, subscription/refund reconciliation, and a real Admin AI action layer.
+The repository is **not yet a complete production universal portal**. The largest remaining gaps are operational rather than cosmetic: durable browser workers, real provider credentials, storage-provider routing, website-specific registry data, complete admin API wiring, usage/cost accounting, subscription/refund reconciliation, and a real Admin AI action layer.
 
 During this audit, two code changes were made. The payment checkout verification route was added and the Razorpay ledger lookup was corrected for the first-party `auth_users` schema while retaining a legacy Supabase compatibility fallback. The admin dashboard's headline metrics were changed from synthetic revenue/worker/uptime figures to API-backed values or explicit unavailable states.
 
@@ -40,10 +40,12 @@ Documents uploaded through the current user routes are stored under the private 
 3. Replaced fabricated admin headline values such as revenue, worker saturation, uptime, and user counts with API-backed values or explicit unavailable states.
 4. Added a database-backed admin summary fetch to the dashboard.
 5. Disabled unconfigured phone, social, and email gateway claims in the admin UI.
+6. Added durable task lifecycle tables for tasks, steps, browser sessions, session events, workflow events, and task locks.
+7. Added ownership-scoped task APIs with idempotent creation, state-machine validation, leases, retries, and resume references.
 
 ## Verification results
 
-The final backend run after the audit fixes completed with **134 passed tests**. The frontend suite completed with **4 passed tests**, and the Vite production build completed successfully. Python compilation and `git diff --check` also passed during the audit.
+The final backend run after the runtime slice completed with **137 passed tests**. The frontend suite completed with **4 passed tests**, and the Vite production build completed successfully. Python compilation and `git diff --check` also passed during the audit.
 
 The test suite has warnings for the development JWT secret length, legacy `datetime.utcnow()` usage, and Alembic's legacy path separator setting. These warnings do not fail the suite, but they should be cleaned before a production release.
 
