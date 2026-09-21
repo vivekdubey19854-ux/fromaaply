@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from .auth import require_user_id
 from .database import get_db
-from .task_service import TaskNotFound, TaskStateError, claim_task, create_task, get_task, list_tasks, release_task_lock, transition_task
+from .task_service import TaskNotFound, TaskStateError, claim_task, create_task, get_task, heartbeat_task, list_tasks, release_task_lock, transition_task
+from .task_worker import RedisTaskQueue
 
 router = APIRouter(prefix="/v1/tasks", tags=["durable-tasks"])
 
@@ -19,6 +21,7 @@ class CreateTaskRequest(BaseModel):
 
 
 class TransitionTaskRequest(BaseModel):
+    owner_id: str = Field(min_length=1, max_length=120)
     state: str = Field(pattern="^(running|paused|completed|failed|cancelled|queued)$")
     step: str | None = Field(default=None, max_length=100)
     error_code: str | None = Field(default=None, max_length=80)
@@ -63,7 +66,29 @@ def claim_task_route(task_id: str, body: ClaimTaskRequest, db: Session = Depends
 @router.post("/{task_id}/transition")
 def transition_task_route(task_id: str, body: TransitionTaskRequest, db: Session = Depends(get_db), user_id: str = Depends(require_user_id)):
     try:
-        return transition_task(db, task_id=task_id, user_id=user_id, to_state=body.state, step=body.step, error_code=body.error_code, error_message=body.error_message, resume_reference=body.resume_reference)
+        return transition_task(db, task_id=task_id, user_id=user_id, owner_id=body.owner_id, to_state=body.state, step=body.step, error_code=body.error_code, error_message=body.error_message, resume_reference=body.resume_reference)
+    except TaskNotFound as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except TaskStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/enqueue")
+def enqueue_task_route(task_id: str, db: Session = Depends(get_db), user_id: str = Depends(require_user_id)):
+    try:
+        task = get_task(db, task_id, user_id)
+        RedisTaskQueue().enqueue(task.task_id, user_id=user_id)
+        return {"task_id": task_id, "queued": True}
+    except TaskNotFound as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="task queue is unavailable") from exc
+
+
+@router.post("/{task_id}/heartbeat")
+def heartbeat_task_route(task_id: str, body: ClaimTaskRequest, db: Session = Depends(get_db), user_id: str = Depends(require_user_id)):
+    try:
+        return heartbeat_task(db, task_id=task_id, user_id=user_id, owner_id=body.owner_id, lease_seconds=body.lease_seconds)
     except TaskNotFound as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except TaskStateError as exc:

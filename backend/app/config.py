@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     frontend_base_url: str = "http://localhost:5173"
     email_provider: str = "brevo"
     email_delivery_enabled: bool = False
+    redis_url: str = "redis://localhost:6379/0"
+    task_queue_name: str = "formwise:tasks"
+    task_dead_letter_queue_name: str = "formwise:tasks:dead"
+    task_worker_lease_seconds: int = 60
+    task_max_retries: int = 3
 
     live_browser_enabled: bool = True
     live_input_enabled: bool = True
