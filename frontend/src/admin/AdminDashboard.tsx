@@ -4,6 +4,7 @@ import './admin-dashboard.css';
 type AdminTab = 'cockpit' | 'vault' | 'growth';
 type Provider = { name: string; short: string; tier: string; masked: string; latency: string; configured: boolean };
 type UserRow = { id: string; name: string; plan: string; credits: number; status: string; spend: string; lastJob: string };
+type AdminSummary = { users:number; websites:number; enabled_websites:number; audit_events:number };
 
 const API = localStorage.getItem('formwise_api') || 'http://localhost:8000';
 const adminToken = () => localStorage.getItem('formwise_access_token') || localStorage.getItem('formwise_admin_token') || '';
@@ -21,9 +22,9 @@ const PROVIDERS: Provider[] = [
 const STORAGE_NODES: { name:string; bucket:string; ping:string; status:string; priority:number }[] = [];
 
 const AUTH_GATEWAYS = [
-  ['Phone OTP Gateway','Firebase SDK',true],
-  ['Google Social Auth','OAuth 2.0 PKCE',true],
-  ['Email / Magic Link Authentication','Native mail flow',true],
+  ['Phone OTP Gateway','Firebase SDK',false],
+  ['Google Social Auth','OAuth 2.0 PKCE',false],
+  ['Email / Magic Link Authentication','Native mail flow',false],
   ['WhatsApp OTP Gateway','Meta Cloud API',false],
 ];
 
@@ -81,11 +82,16 @@ export default function AdminDashboard() {
   const [referrer, setReferrer] = useState(10);
   const [refundSearch, setRefundSearch] = useState('USR-92105');
   const [refundState, setRefundState] = useState<'idle'|'success'|'error'>('idle');
+  const [summary, setSummary] = useState<AdminSummary | null>(null);
 
   useEffect(() => {
     localStorage.setItem('formwise_maintenance_mode', String(maintenance));
     window.dispatchEvent(new CustomEvent('formwise:maintenance-mode', { detail: { enabled: maintenance } }));
   }, [maintenance]);
+
+  useEffect(() => {
+    adminRequest<AdminSummary>('/v1/admin/summary').then(setSummary).catch(error => setStatus(error instanceof Error ? error.message : 'Admin summary unavailable.'));
+  }, []);
 
   const selectedUser = useMemo(() => users.find(u => u.id === refundSearch) || users[0], [refundSearch, users]);
 
@@ -188,13 +194,13 @@ export default function AdminDashboard() {
 
       {tab === 'cockpit' && <section className="space-y-5">
         <div className="grid gap-4 xl:grid-cols-4">
-          <Metric label="PLATFORM REVENUE (MTD)" value="₹48,92,450" note="↗ +28.4% · run-rate ₹1,63,080/day" />
-          <Metric label="ARR VELOCITY" value="₹5.87 Cr" note="14 enterprise accounts · on-track" accent="cyan" />
-          <Metric label="ACTIVE BROWSER WORKERS" value="142 / 200" note="71% saturation · headless Chromium v124" />
-          <Metric label="ZERO-TRUST GUARD" value="99.98%" note="SELF-HEALING UPTIME · SHA256 ATTESTED" accent="cyan" />
+          <Metric label="REGISTERED USERS" value={summary ? summary.users.toLocaleString('en-IN') : '—'} note={summary ? `${summary.audit_events.toLocaleString('en-IN')} audit events recorded` : 'Waiting for authenticated admin API'} />
+          <Metric label="WEBSITE REGISTRY" value={summary ? `${summary.enabled_websites} / ${summary.websites}` : '—'} note="Enabled / registered websites" accent="cyan" />
+          <Metric label="REVENUE (MTD)" value="—" note="Payment ledger endpoint not connected" />
+          <Metric label="SYSTEM HEALTH" value="API" note="Worker, storage and provider probes required" accent="cyan" />
         </div>
         <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
-          <div className="fw-panel"><SectionHeader eyebrow="USER MATRIX DATA TABLE" title="User Ledger · Real-Time" action={<span className="fw-chip">5 USERS IN VIEW</span>} />
+          <div className="fw-panel"><SectionHeader eyebrow="USER MATRIX DATA TABLE" title="User Ledger · Real-Time" action={<span className="fw-chip">{users.length} USERS IN VIEW</span>} />
             <div className="overflow-x-auto"><table className="fw-table"><thead><tr><th>USER</th><th>PLAN</th><th>CREDITS</th><th>STATUS</th><th>SPEND</th><th>LAST JOB</th><th>ACTION</th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><strong>{user.name}</strong><small>{user.id}</small></td><td>{user.plan}</td><td className="fw-number">{user.credits.toLocaleString('en-IN')}</td><td><span className={`fw-state ${user.status === 'WATCH' ? 'watch':''}`}>{user.status}</span></td><td>{user.spend}</td><td>{user.lastJob}</td><td><div className="flex gap-2"><button disabled={busyAction===`bonus:${user.id}`} onClick={()=>grantBonus(user)} className="fw-pill">{busyAction===`bonus:${user.id}`?'…':'Grant Bonus'}</button><button disabled={busyAction===`refund:${user.id}`} onClick={()=>triggerRefund(user)} className="fw-pill fw-pill-cyan">{busyAction===`refund:${user.id}`?'…':'Trigger Refund'}</button></div></td></tr>)}</tbody></table></div>
           </div>
           <div className="fw-panel"><SectionHeader eyebrow="ZERO-TRUST GUARD & INTEGRITY" title="System Health" action={<span className="fw-state">ALL SYSTEMS OPERATIONAL</span>} /><div className="fw-health-grid"><div><span>Attestation</span><strong>SHA256:7f9a...c03b</strong></div><div><span>AI provider vault</span><strong>AES-256 / HSM</strong></div><div><span>Plaintext leakage</span><strong>0 detected</strong></div><div><span>Worker isolation</span><strong>Headless Chromium</strong></div></div><div className="fw-health-meter"><div><span>CPU · 38%</span><i style={{width:'38%'}} /></div><div><span>Memory · 57%</span><i style={{width:'57%'}} /></div><div><span>QPS · 124/s</span><i style={{width:'76%'}} /></div></div></div>

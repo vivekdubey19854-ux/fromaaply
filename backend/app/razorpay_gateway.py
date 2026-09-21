@@ -89,10 +89,19 @@ class RazorpayGatewayService:
 
         transaction_id = str(uuid.uuid4())
         try:
-            email_row = self.db.execute(
-                text("SELECT email FROM auth.users WHERE id = :user_id"),
-                {"user_id": normalized_user_id},
-            ).mappings().first()
+            try:
+                email_row = self.db.execute(
+                    text("SELECT email FROM auth_users WHERE user_id = :user_id"),
+                    {"user_id": normalized_user_id},
+                ).mappings().first()
+            except Exception:
+                # Legacy Supabase deployments used auth.users. New production
+                # deployments use the first-party auth_users migration.
+                self.db.rollback()
+                email_row = self.db.execute(
+                    text("SELECT email FROM auth.users WHERE id = :user_id"),
+                    {"user_id": normalized_user_id},
+                ).mappings().first()
             user_email = str(email_row["email"]).strip() if email_row and email_row.get("email") else None
             self.db.execute(
                 text(
