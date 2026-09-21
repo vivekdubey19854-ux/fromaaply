@@ -135,6 +135,27 @@ def checkpoint_task(db: Session, *, task_id: str, user_id: str, owner_id: str, s
     return _serialize(task)
 
 
+def bind_browser_session(db: Session, *, task_id: str, user_id: str, owner_id: str, browser_session_id: str) -> dict[str, Any]:
+    task = get_task(db, task_id, user_id)
+    _require_lease(db, task_id=task_id, owner_id=owner_id)
+    task.browser_session_id = browser_session_id
+    task.updated_at = datetime.utcnow()
+    db.commit()
+    return _serialize(task)
+
+
+def requeue_paused_task(db: Session, *, task_id: str, user_id: str) -> dict[str, Any]:
+    """Human action only makes a paused task eligible; a worker must claim it again."""
+    task = get_task(db, task_id, user_id)
+    if task.state != "paused":
+        raise TaskStateError("only paused tasks can be resumed by a human action")
+    task.state = "queued"
+    task.updated_at = datetime.utcnow()
+    db.add(WorkflowEventRecord(task_id=task.task_id, workflow_id=task.workflow_id, user_id=user_id, event_type="task.human_resume_requested", from_state="paused", to_state="queued", details=task.resume_reference))
+    db.commit()
+    return _serialize(task)
+
+
 def recover_expired_leases(db: Session, *, max_retries: int = 3) -> list[dict[str, Any]]:
     now = datetime.utcnow()
     locks = db.scalars(select(TaskLockRecord).where(TaskLockRecord.locked_until <= now)).all()

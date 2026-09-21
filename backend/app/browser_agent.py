@@ -80,6 +80,15 @@ async def close_session(session_id,user_id):
     async with _LOCK: await _close_session(s)
 async def close_all_sessions():
     async with _LOCK:
-        for s in list(_SESSIONS.values()): await _close_session(s)
+        for s in list(_SESSIONS.values()):
+            try:
+                await _close_session(s)
+            except Exception:
+                _SESSIONS.pop(s.session_id, None)
         global _PLAYWRIGHT
-        if _PLAYWRIGHT is not None: await _PLAYWRIGHT.stop(); _PLAYWRIGHT=None
+        if _PLAYWRIGHT is not None:
+            try:
+                await _PLAYWRIGHT.stop()
+            except Exception:
+                pass
+            _PLAYWRIGHT=None

@@ -86,9 +86,10 @@ def confirm_research(db:Session,storage:PrivateStorage,user_id:str,workflow_id:s
     if workflow["state"] not in {"research_ready","documents_missing"}:raise ValueError("workflow is not awaiting document/research confirmation")
     if not confirmed:workflow["state"]="cancelled";_save(storage,user_id,workflow);_audit(db,user_id,"workflow.cancelled",workflow_id);return workflow
     check=_document_checklist(db,user_id,storage);workflow["document_check"]=check;workflow["state"]="documents_ready" if check["ready"] else "documents_missing";workflow["history"].append({"event":"checklist_confirmed","at":time.time()});_save(storage,user_id,workflow);_audit(db,user_id,"workflow.document_check_completed",workflow_id);return workflow
-async def open_application(db:Session,storage:PrivateStorage,user_id:str,workflow_id:str)->dict[str,Any]:
+async def open_application(db:Session,storage:PrivateStorage,user_id:str,workflow_id:str,resume:bool=False)->dict[str,Any]:
     workflow=load_workflow(storage,user_id,workflow_id)
-    if workflow["state"]!="documents_ready":raise ValueError("complete the missing profile/document checklist first")
+    allowed_states={"documents_ready","browser_ready","form_review","otp_required","captcha_required","final_review"}
+    if workflow["state"]!="documents_ready" and not (resume and workflow["state"] in allowed_states):raise ValueError("complete the missing profile/document checklist first")
     from app.browser_agent import create_session
     target=workflow["research"].get("apply_url") or workflow["research"].get("application_form_url")
     if not target:raise ValueError("approved application URL is required")
