@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     serper_url: str = "https://google.serper.dev/search"
     research_timeout_seconds: float = 20.0
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    frontend_base_url: str = "http://localhost:5173"
+    email_provider: str = "brevo"
+    email_delivery_enabled: bool = False
 
     live_browser_enabled: bool = True
     live_input_enabled: bool = True

@@ -80,6 +80,14 @@ class BrevoNotificationService:
             text_content=f"Your Formwise verification code is {normalized_otp}.",
         )
 
+    def send_verification_email(self, user_email: str, token: str, *, base_url: str) -> Mapping[str, Any]:
+        link = f"{base_url.rstrip('/')}/verify-email?token={self._escape(token)}"
+        return self._send(user_email, subject="Verify your Formwise email", html_content=f'<html><body><h2>Verify your email</h2><p><a href="{link}">Verify email</a></p><p>This link expires in 24 hours.</p></body></html>', text_content=f"Verify your Formwise email: {base_url.rstrip('/')}/verify-email?token={token}")
+
+    def send_password_reset_email(self, user_email: str, token: str, *, base_url: str) -> Mapping[str, Any]:
+        link = f"{base_url.rstrip('/')}/reset-password?token={self._escape(token)}"
+        return self._send(user_email, subject="Reset your Formwise password", html_content=f'<html><body><h2>Password reset</h2><p><a href="{link}">Reset password</a></p><p>This link expires in 1 hour.</p></body></html>', text_content=f"Reset your Formwise password: {base_url.rstrip('/')}/reset-password?token={token}")
+
     def send_receipt_invoice(self, user_email: str, transaction_id: str, amount: Any, credits: Any) -> Mapping[str, Any]:
         transaction = str(transaction_id).strip()
         if not transaction:

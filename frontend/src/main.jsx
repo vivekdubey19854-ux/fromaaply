@@ -61,6 +61,13 @@ function AuthScreen({ onAuthenticated }) {
   const submit = async event => {
     event.preventDefault(); setError(''); setBusy(true);
     try {
+      if (mode === 'reset') {
+        const response = await fetch(`${API}/v1/auth/password-reset/request`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || 'Password reset request failed.');
+        setError(data.email_delivery_configured ? 'Reset email sent. Check your inbox.' : 'Reset request accepted. Configure the email provider to receive the link.');
+        return;
+      }
       const response = await fetch(`${API}/v1/auth/${mode === 'signup' ? 'signup' : 'login'}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mode === 'signup' ? { email, password, full_name: fullName || null } : { email, password }),
@@ -76,13 +83,14 @@ function AuthScreen({ onAuthenticated }) {
     finally { setBusy(false); }
   };
   return <main className="fw-auth-page"><form className="fw-auth-card" onSubmit={submit}>
-    <div className="fw-kicker">FORMWISE // SECURE ACCOUNT</div><h1>{mode === 'signup' ? 'Create your account' : 'Welcome back'}</h1>
+    <div className="fw-kicker">FORMWISE // SECURE ACCOUNT</div><h1>{mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : 'Welcome back'}</h1>
     <p>Save verified profile data securely and prepare forms with human approval at sensitive steps.</p>
     {mode === 'signup' && <input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Full name" maxLength={200} />}
     <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" autoComplete="email" />
-    <input type="password" required minLength={12} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password (12+ characters)" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />
+    {mode !== 'reset' && <input type="password" required minLength={12} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password (12+ characters)" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />}
     {error && <div className="fw-inline-status">{error}</div>}
-    <button className="fw-neon-btn" disabled={busy}>{busy ? 'AUTHENTICATING…' : mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN'}</button>
+    <button className="fw-neon-btn" disabled={busy}>{busy ? 'PROCESSING…' : mode === 'signup' ? 'CREATE ACCOUNT' : mode === 'reset' ? 'SEND RESET LINK' : 'SIGN IN'}</button>
+    {mode === 'login' && <button type="button" className="fw-link-btn" onClick={() => { setMode('reset'); setError(''); }}>Forgot password?</button>}
     <button type="button" className="fw-link-btn" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); }}>{mode === 'signup' ? 'Already have an account? Sign in' : 'Create a new account'}</button>
   </form></main>;
 }

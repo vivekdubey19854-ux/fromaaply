@@ -10,9 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import generate_one_time_token, hash_one_time_token, hash_password, issue_access_token, issue_dev_token, issue_refresh_token, require_user_id, verify_password
+from app.ai_provider_adapter import MultiAIProviderAdapter
 from app.config import settings
+from app.credential_crypto import decrypt_admin_api_key
 from app.database import get_db
 from app.db_models import AuthActionTokenRecord, AuthUserRecord, ProfileRecord, RevokedTokenRecord
+from app.notification_service import BrevoNotificationService
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -149,12 +152,29 @@ def _create_action_token(db: Session, user: AuthUserRecord, purpose: str, ttl_ho
     return raw
 
 
+def _deliver_action_email(db: Session, user: AuthUserRecord, token: str, purpose: str) -> bool:
+    if not settings.email_delivery_enabled:
+        return False
+    service = BrevoNotificationService(MultiAIProviderAdapter(db, credential_decryptor=decrypt_admin_api_key))
+    try:
+        if purpose == "email_verification":
+            service.send_verification_email(user.email, token, base_url=settings.frontend_base_url)
+        else:
+            service.send_password_reset_email(user.email, token, base_url=settings.frontend_base_url)
+        return True
+    except Exception:
+        return False
+    finally:
+        service.close()
+
+
 @router.post("/verification/request")
 def request_verification(payload: EmailActionRequest, db: Session = Depends(get_db)) -> dict[str, str | bool]:
     user = db.scalar(select(AuthUserRecord).where(AuthUserRecord.email == payload.email))
     response: dict[str, str | bool] = {"status": "accepted", "email_delivery_configured": False}
     if user and user.status == "active":
         raw = _create_action_token(db, user, "email_verification", 24)
+        response["email_delivery_configured"] = _deliver_action_email(db, user, raw, "email_verification")
         if settings.environment != "production":
             response["development_token"] = raw
     return response
@@ -179,6 +199,7 @@ def request_password_reset(payload: EmailActionRequest, db: Session = Depends(ge
     response: dict[str, str | bool] = {"status": "accepted", "email_delivery_configured": False}
     if user and user.status == "active":
         raw = _create_action_token(db, user, "password_reset", 1)
+        response["email_delivery_configured"] = _deliver_action_email(db, user, raw, "password_reset")
         if settings.environment != "production":
             response["development_token"] = raw
     return response
