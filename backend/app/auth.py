@@ -75,3 +75,12 @@ def issue_dev_token(user_id: str, ttl_seconds: int = 3600) -> str:
     if settings.environment == "production":
         raise RuntimeError("development token issuance is disabled in production")
     return issue_access_token(user_id, ttl_seconds=ttl_seconds)
+
+
+
+def generate_one_time_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_one_time_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

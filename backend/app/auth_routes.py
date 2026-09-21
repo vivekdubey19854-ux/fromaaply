@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,10 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import hash_password, issue_access_token, issue_dev_token, issue_refresh_token, require_user_id, verify_password
+from app.auth import generate_one_time_token, hash_one_time_token, hash_password, issue_access_token, issue_dev_token, issue_refresh_token, require_user_id, verify_password
 from app.config import settings
 from app.database import get_db
-from app.db_models import AuthUserRecord, ProfileRecord, RevokedTokenRecord
+from app.db_models import AuthActionTokenRecord, AuthUserRecord, ProfileRecord, RevokedTokenRecord
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -54,6 +54,20 @@ class LogoutRequest(BaseModel):
     refresh_token: str | None = Field(default=None, min_length=20, max_length=4096)
 
 
+class EmailActionRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class PasswordResetRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 def _tokens(user: AuthUserRecord) -> dict[str, str | int]:
     return {
         "access_token": issue_access_token(user.user_id, role=user.role),
@@ -76,7 +90,7 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> dict[str, s
         db.rollback()
         raise HTTPException(status_code=409, detail="an account with this email already exists") from exc
     db.refresh(user)
-    return {"user_id": user.user_id, "email": user.email, **_tokens(user)}
+    return {"user_id": user.user_id, "email": user.email, "email_verification_required": True, **_tokens(user)}
 
 
 @router.post("/login")
@@ -126,3 +140,59 @@ def logout(payload: LogoutRequest | None = None, user_id: str = Depends(require_
         except jwt.PyJWTError:
             pass
     return {"status": "logged_out", "user_id": user_id}
+
+
+def _create_action_token(db: Session, user: AuthUserRecord, purpose: str, ttl_hours: int) -> str:
+    raw = generate_one_time_token()
+    db.add(AuthActionTokenRecord(token_hash=hash_one_time_token(raw), user_id=user.user_id, purpose=purpose, expires_at=datetime.utcnow() + timedelta(hours=ttl_hours)))
+    db.commit()
+    return raw
+
+
+@router.post("/verification/request")
+def request_verification(payload: EmailActionRequest, db: Session = Depends(get_db)) -> dict[str, str | bool]:
+    user = db.scalar(select(AuthUserRecord).where(AuthUserRecord.email == payload.email))
+    response: dict[str, str | bool] = {"status": "accepted", "email_delivery_configured": False}
+    if user and user.status == "active":
+        raw = _create_action_token(db, user, "email_verification", 24)
+        if settings.environment != "production":
+            response["development_token"] = raw
+    return response
+
+
+@router.post("/verification/confirm")
+def confirm_verification(payload: RefreshRequest, db: Session = Depends(get_db)) -> dict[str, str]:
+    token = db.get(AuthActionTokenRecord, hash_one_time_token(payload.refresh_token))
+    if token is None or token.purpose != "email_verification" or token.used_at or token.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=400, detail="invalid or expired verification token")
+    user = db.get(AuthUserRecord, token.user_id)
+    if user is None:
+        raise HTTPException(status_code=400, detail="invalid verification token")
+    token.used_at = datetime.utcnow()
+    db.commit()
+    return {"status": "verified", "user_id": user.user_id}
+
+
+@router.post("/password-reset/request")
+def request_password_reset(payload: EmailActionRequest, db: Session = Depends(get_db)) -> dict[str, str | bool]:
+    user = db.scalar(select(AuthUserRecord).where(AuthUserRecord.email == payload.email))
+    response: dict[str, str | bool] = {"status": "accepted", "email_delivery_configured": False}
+    if user and user.status == "active":
+        raw = _create_action_token(db, user, "password_reset", 1)
+        if settings.environment != "production":
+            response["development_token"] = raw
+    return response
+
+
+@router.post("/password-reset/confirm")
+def confirm_password_reset(payload: PasswordResetRequest, db: Session = Depends(get_db)) -> dict[str, str]:
+    token = db.get(AuthActionTokenRecord, hash_one_time_token(payload.token))
+    if token is None or token.purpose != "password_reset" or token.used_at or token.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=400, detail="invalid or expired password reset token")
+    user = db.get(AuthUserRecord, token.user_id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=400, detail="account is unavailable")
+    user.password_hash = hash_password(payload.new_password)
+    token.used_at = datetime.utcnow()
+    db.commit()
+    return {"status": "password_updated"}
