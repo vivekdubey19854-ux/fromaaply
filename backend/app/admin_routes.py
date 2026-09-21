@@ -7,7 +7,7 @@ from typing import Any
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from .auth import require_user_id
@@ -323,3 +323,49 @@ def upsert_admin_coupon(
 # Kept for compatibility with future admin-only endpoints that need authenticated identity
 # in addition to the system-admin gate.
 admin_user_dependency = require_user_id
+
+
+class WebsiteRegistryRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    category: str = Field(min_length=2, max_length=50)
+    base_url: str = Field(min_length=8, max_length=500)
+    allowed_domains: list[str] = Field(default_factory=list, max_length=20)
+    enabled: bool = False
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/summary")
+def admin_summary(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    """Return database-backed counts only; no synthetic dashboard metrics."""
+    from sqlalchemy import func
+    from .db_models import AuthUserRecord, AuditLogRecord, WebsiteRegistryRecord
+    return {
+        "users": int(db.scalar(select(func.count()).select_from(AuthUserRecord)) or 0),
+        "websites": int(db.scalar(select(func.count()).select_from(WebsiteRegistryRecord)) or 0),
+        "enabled_websites": int(db.scalar(select(func.count()).select_from(WebsiteRegistryRecord).where(WebsiteRegistryRecord.enabled.is_(True))) or 0),
+        "audit_events": int(db.scalar(select(func.count()).select_from(AuditLogRecord)) or 0),
+    }
+
+
+@router.get("/websites")
+def list_websites(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
+    from .db_models import WebsiteRegistryRecord
+    rows = db.scalars(select(WebsiteRegistryRecord).order_by(WebsiteRegistryRecord.name)).all()
+    return [{"website_id": row.website_id, "name": row.name, "category": row.category, "base_url": row.base_url, "allowed_domains": json.loads(row.allowed_domains_json), "enabled": row.enabled, "config": json.loads(row.config_json)} for row in rows]
+
+
+@router.post("/websites", status_code=201)
+def create_website(payload: WebsiteRegistryRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    from urllib.parse import urlparse
+    from .db_models import WebsiteRegistryRecord
+    parsed = urlparse(payload.base_url)
+    if parsed.scheme not in {"https"} or not parsed.hostname:
+        raise HTTPException(status_code=422, detail="website base_url must be an HTTPS URL")
+    domains = [domain.strip().lower() for domain in payload.allowed_domains if domain.strip()]
+    if parsed.hostname.lower() not in domains:
+        domains.append(parsed.hostname.lower())
+    row = WebsiteRegistryRecord(name=payload.name.strip(), category=payload.category.strip().lower(), base_url=payload.base_url, allowed_domains_json=json.dumps(sorted(set(domains))), enabled=payload.enabled, config_json=json.dumps(payload.config, separators=(",", ":")))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"website_id": row.website_id, "name": row.name, "category": row.category, "base_url": row.base_url, "allowed_domains": domains, "enabled": row.enabled, "config": payload.config}

@@ -9,10 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import hash_password, issue_access_token, issue_dev_token, issue_refresh_token, verify_password
+from app.auth import hash_password, issue_access_token, issue_dev_token, issue_refresh_token, require_user_id, verify_password
 from app.config import settings
 from app.database import get_db
-from app.db_models import AuthUserRecord, ProfileRecord
+from app.db_models import AuthUserRecord, ProfileRecord, RevokedTokenRecord
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -48,6 +48,10 @@ class LoginRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=20, max_length=4096)
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str | None = Field(default=None, min_length=20, max_length=4096)
 
 
 def _tokens(user: AuthUserRecord) -> dict[str, str | int]:
@@ -94,6 +98,9 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> dict[str,
         raise HTTPException(status_code=401, detail="invalid refresh token") from exc
     if claims.get("role") != "refresh":
         raise HTTPException(status_code=401, detail="invalid refresh token")
+    jti = str(claims.get("jti", ""))
+    if not jti or db.get(RevokedTokenRecord, jti) is not None:
+        raise HTTPException(status_code=401, detail="refresh token has been revoked")
     user = db.get(AuthUserRecord, str(claims.get("sub", "")))
     if user is None or user.status != "active":
         raise HTTPException(status_code=401, detail="account is unavailable")
@@ -105,3 +112,17 @@ def dev_token(payload: DevTokenRequest) -> dict[str, str | int]:
     if settings.environment == "production":
         raise HTTPException(status_code=404, detail="development token issuance is disabled")
     return {"access_token": issue_dev_token(payload.user_id, payload.ttl_seconds), "token_type": "bearer", "expires_in": payload.ttl_seconds}
+
+
+@router.post("/logout")
+def logout(payload: LogoutRequest | None = None, user_id: str = Depends(require_user_id), db: Session = Depends(get_db)) -> dict[str, str]:
+    if payload and payload.refresh_token:
+        import jwt
+        try:
+            claims = jwt.decode(payload.refresh_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm], options={"require": ["sub", "exp", "jti"]})
+            if claims.get("role") == "refresh" and str(claims.get("sub")) == user_id:
+                db.merge(RevokedTokenRecord(jti=str(claims["jti"]), user_id=user_id, expires_at=datetime.fromtimestamp(claims["exp"])))
+                db.commit()
+        except jwt.PyJWTError:
+            pass
+    return {"status": "logged_out", "user_id": user_id}

@@ -8,7 +8,7 @@ const NAV = [
   ['human', '◇', 'Human Gateway'],
 ];
 
-export default function StitchShell({ view, onNavigate, status, children }) {
+export default function StitchShell({ view, onNavigate, status, onLogout, children }) {
   return (
     <div className="fw-app-shell">
       <header className="fw-topbar">
@@ -25,7 +25,7 @@ export default function StitchShell({ view, onNavigate, status, children }) {
           <div className="fw-cluster"><i /> Cluster: <b>Healthy</b><span>|</span><em>0.4s DOM Resolution</em></div>
           <button className="fw-ghost-btn">⌘ Inspect DOM</button>
           <button className="fw-ghost-btn fw-pause">◉ Pause Agent</button>
-          <div className="fw-avatar">●</div>
+          <button className="fw-avatar" aria-label="Sign out" onClick={onLogout}>●</button>
         </div>
       </header>
 

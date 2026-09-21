@@ -20,6 +20,27 @@ class AuthUserRecord(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class RevokedTokenRecord(Base):
+    __tablename__ = "revoked_tokens"
+    jti: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WebsiteRegistryRecord(Base):
+    __tablename__ = "website_registry"
+    website_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(200))
+    category: Mapped[str] = mapped_column(String(50))
+    base_url: Mapped[str] = mapped_column(String(500))
+    allowed_domains_json: Mapped[str] = mapped_column(Text, default="[]")
+    enabled: Mapped[bool] = mapped_column(default=False)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ProfileRecord(Base):
     __tablename__ = "profiles"
     user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
