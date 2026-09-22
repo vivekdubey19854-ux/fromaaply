@@ -5,6 +5,8 @@ type AdminTab = 'cockpit' | 'vault' | 'growth';
 type Provider = { name: string; short: string; tier: string; masked: string; latency: string; configured: boolean };
 type UserRow = { id: string; name: string; plan: string; credits: number; status: string; spend: string; lastJob: string };
 type AdminSummary = { users:number; websites:number; enabled_websites:number; audit_events:number; tasks?:number; browser_sessions?:number; ai_usage?:number };
+type ProviderPolicy = { provider:string; priority:number; enabled:boolean; status?:string; error_rate?:string };
+type WebsiteHealth = { website_id:string; name:string; verified:boolean; enabled:boolean; health_status:string; version:string };
 
 const API = localStorage.getItem('formwise_api') || 'http://localhost:8000';
 const adminToken = () => localStorage.getItem('formwise_access_token') || localStorage.getItem('formwise_admin_token') || '';
@@ -85,6 +87,8 @@ export default function AdminDashboard() {
   const [refundState, setRefundState] = useState<'idle'|'success'|'error'>('idle');
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [aiUsage, setAiUsage] = useState<{total_tokens:number; total_cost:string}>({total_tokens:0, total_cost:'0'});
+  const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy[]>([]);
+  const [websites, setWebsites] = useState<WebsiteHealth[]>([]);
 
   useEffect(() => {
     localStorage.setItem('formwise_maintenance_mode', String(maintenance));
@@ -96,10 +100,14 @@ export default function AdminDashboard() {
       adminRequest<AdminSummary>('/v1/admin/summary'),
       adminRequest<{records:unknown[]; total_tokens:number; total_cost:string}>('/v1/admin/ai-usage'),
       adminRequest<Array<{user_id:string; email:string; status:string; role:string}>>('/v1/admin/users'),
-    ]).then(([liveSummary, liveUsage, liveUsers]) => {
+      adminRequest<ProviderPolicy[]>('/v1/admin/provider-policy'),
+      adminRequest<WebsiteHealth[]>('/v1/admin/websites'),
+    ]).then(([liveSummary, liveUsage, liveUsers, livePolicy, liveWebsites]) => {
       setSummary(liveSummary);
       setAiUsage({total_tokens: liveUsage.total_tokens, total_cost: liveUsage.total_cost});
       setUsers(liveUsers.map(user => ({id:user.user_id, name:user.email, plan:user.role, credits:0, status:user.status, spend:'—', lastJob:'—'})));
+      setProviderPolicy(livePolicy);
+      setWebsites(liveWebsites);
       setStatus('LIVE DATABASE TELEMETRY CONNECTED');
     }).catch(error => setStatus(error instanceof Error ? error.message : 'Admin telemetry unavailable.'));
   }, []);
@@ -172,14 +180,32 @@ export default function AdminDashboard() {
     finally { setBusyAction(''); }
   };
 
-  const executeCommand = () => {
+  const reconcilePayments = async () => {
+    setBusyAction('reconcile');
+    try {
+      const result = await adminRequest<{matched:number; expired:number}>('/v1/admin/payments/reconcile', {method:'POST'});
+      pushLog(`CO-PILOT: reconciliation matched ${result.matched}; expired ${result.expired}.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Payment reconciliation failed.'); }
+    finally { setBusyAction(''); }
+  };
+
+  const checkWebsite = async (website:WebsiteHealth) => {
+    setBusyAction(`health:${website.website_id}`);
+    try {
+      const result = await adminRequest<{health_status:string}>(`/v1/admin/websites/${encodeURIComponent(website.website_id)}/health-check`, {method:'POST'});
+      setWebsites(items => items.map(item => item.website_id === website.website_id ? {...item, health_status:result.health_status} : item));
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Website health check failed.'); }
+    finally { setBusyAction(''); }
+  };
+
+  const executeCommand = async () => {
     if (!command.trim()) return;
     const current = command.trim();
     pushLog(`ADMIN: ${current}`);
-    if (/freeze/i.test(current)) setFreeze(true);
-    if (/maintenance on/i.test(current)) toggleMaintenance(true);
-    if (/maintenance off/i.test(current)) toggleMaintenance(false);
-    setTimeout(() => pushLog(`CO-PILOT: ✓ Command accepted · ${current}`), 80);
+    try {
+      const result = await adminRequest<{answer:string; summary:Record<string,number>}>('/v1/admin/assistant/query', {method:'POST', body:JSON.stringify({query:current})});
+      pushLog(`CO-PILOT: ${result.answer} ${JSON.stringify(result.summary)}`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Admin assistant unavailable.'); }
     setCommand('');
   };
 
@@ -212,15 +238,17 @@ export default function AdminDashboard() {
           <Metric label="SYSTEM HEALTH" value={status.includes('LIVE') ? 'LIVE' : '—'} note="Readiness and admin API telemetry" accent="cyan" />
         </div>
         <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
-          <div className="fw-panel"><SectionHeader eyebrow="USER MATRIX DATA TABLE" title="User Ledger · Real-Time" action={<span className="fw-chip">{users.length} USERS IN VIEW</span>} />
+          <div className="fw-panel"><SectionHeader eyebrow="USER MATRIX DATA TABLE" title="User Ledger · Real-Time" action={<div className="flex gap-2"><button className="fw-btn fw-btn-secondary" onClick={reconcilePayments} disabled={busyAction==='reconcile'}>{busyAction==='reconcile'?'RECONCILING…':'RECONCILE PAYMENTS'}</button><span className="fw-chip">{users.length} USERS IN VIEW</span></div>} />
             <div className="overflow-x-auto"><table className="fw-table"><thead><tr><th>USER</th><th>PLAN</th><th>CREDITS</th><th>STATUS</th><th>SPEND</th><th>LAST JOB</th><th>ACTION</th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><strong>{user.name}</strong><small>{user.id}</small></td><td>{user.plan}</td><td className="fw-number">{user.credits.toLocaleString('en-IN')}</td><td><span className={`fw-state ${user.status === 'WATCH' ? 'watch':''}`}>{user.status}</span></td><td>{user.spend}</td><td>{user.lastJob}</td><td><div className="flex gap-2"><button disabled={busyAction===`bonus:${user.id}`} onClick={()=>grantBonus(user)} className="fw-pill">{busyAction===`bonus:${user.id}`?'…':'Grant Bonus'}</button><button disabled={busyAction===`refund:${user.id}`} onClick={()=>triggerRefund(user)} className="fw-pill fw-pill-cyan">{busyAction===`refund:${user.id}`?'…':'Trigger Refund'}</button></div></td></tr>)}</tbody></table></div>
           </div>
           <div className="fw-panel"><SectionHeader eyebrow="ZERO-TRUST GUARD & INTEGRITY" title="System Health" action={<span className="fw-state">{status}</span>} /><div className="fw-health-grid"><div><span>Database</span><strong>Admin API checked</strong></div><div><span>AI usage ledger</span><strong>{aiUsage.total_tokens.toLocaleString('en-IN')} tokens</strong></div><div><span>Browser sessions</span><strong>{summary?.browser_sessions ?? '—'}</strong></div><div><span>Tasks</span><strong>{summary?.tasks ?? '—'}</strong></div></div><div className="fw-health-meter"><div><span>Metrics</span><i style={{width:summary ? '100%':'15%'}} /></div></div></div>
         </div>
+        <div className="fw-panel"><SectionHeader eyebrow="VERIFIED WEBSITE HEALTH" title="Official Registry Status" action={<span className="fw-chip">{websites.length} REGISTERED</span>} /><div className="space-y-2">{websites.map(website => <div key={website.website_id} className="flex items-center justify-between gap-3 border-b border-white/10 py-2"><span>{website.name} · v{website.version}</span><span className="flex items-center gap-2"><b>{website.verified ? website.health_status : 'unverified'}</b><button className="fw-pill" onClick={() => checkWebsite(website)} disabled={busyAction===`health:${website.website_id}`}>CHECK</button></span></div>)}</div></div>
       </section>}
 
       {tab === 'vault' && <section className="space-y-5">
-        <div className="fw-panel"><SectionHeader eyebrow="20+ ENCRYPTED LLM API VAULT MATRIX" title="Secure Vaults Gateway · HSM Key Enclaves" action={<div className="flex gap-2"><button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: ✓ Sync All Enclaves initiated.')}>SYNC ALL ENCLAVES</button><button className="fw-btn fw-btn-danger" onClick={()=>setFreeze(true)}>KEY REVOCATION</button></div>} />
+        <div className="fw-panel"><SectionHeader eyebrow="AI PROVIDER POLICY · LIVE DATABASE" title="Secure Vaults Gateway · HSM Key Enclaves" action={<div className="flex gap-2"><span className="fw-chip">{providerPolicy.length} POLICIES</span><button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: Provider policy is server-authoritative.')}>REFRESH POLICY</button></div>} />
+          {providerPolicy.length > 0 && <div className="fw-callout success">{providerPolicy.map(policy => `${policy.provider}: priority ${policy.priority} · ${policy.enabled ? 'enabled':'disabled'} · ${policy.status || 'health pending'}`).join(' | ')}</div>}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{providers.map(provider => <div key={provider.name} className="fw-vault-card"><div className="fw-provider-head"><span className="fw-provider-icon">{provider.short.slice(0,3)}</span><div><strong>{provider.name}</strong><span>{provider.tier}</span></div><span className={provider.configured ? 'fw-state':'fw-state fw-state-muted'}>{provider.configured?'CONFIGURED':'EMPTY'}</span></div><div className="fw-secret-row"><code>{provider.configured ? provider.masked : 'Enter provider API key…'}</code><button onClick={()=>{setSelectedProvider(provider);setKeyValue('')}}>{provider.configured?'ROTATE':'CONFIGURE'}</button></div><div className="fw-vault-foot"><span>Latency</span><b>{provider.latency}</b><span>{provider.configured?'AES-256 encrypted':'Awaiting secure input'}</span></div></div>)}</div>
         </div>
         <div className="grid gap-5 xl:grid-cols-[1.3fr_.9fr]">

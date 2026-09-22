@@ -71,3 +71,16 @@ The admin API now exposes live users, AI usage, tasks, browser sessions, payment
 Production container files are present at the repository root, with PostgreSQL, Redis authentication, API, durable worker/browser worker and frontend services in `docker-compose.production.yml`. The deployment package includes `.env.production.example`, Nginx routing, backup validation, CI PostgreSQL/Redis services and `docs/DEPLOYMENT.md`.
 
 The local verification result is **142 backend tests passed**, **4 frontend tests passed**, a successful frontend production build, successful Python compilation, one Alembic head at `0014_registry_production`, and no Alembic drift. Docker, PostgreSQL and Redis could not be executed in this sandbox because their local daemons/CLI are unavailable. Real credential and staging validation therefore remains an external release requirement rather than a claimed local completion.
+
+
+## Final remaining production pass — 2026-09-22
+
+The AI policy layer now supports database-configured provider enablement, priority, daily/monthly token and cost limits, request-per-minute limits, cooldown checks and provider health counters. Calls with authenticated user metadata record provider health and usage data; fallback remains bounded and policy failures fail closed for disabled or quota-limited providers.
+
+Payment controls now include retry state handling, expiry handling, refund ledger requests, server-side Razorpay refund invocation, reconciliation records, unmatched-order reconciliation and admin reconciliation endpoints. Refund and other high-risk admin actions use an authorization, preview and explicit-confirmation sequence. Unsupported destructive actions are denied rather than executed.
+
+Website registry health checks validate HTTPS, verified state and allowed official hostname before requesting the site. Results persist as healthy, degraded or down history. Three consecutive failures disable a site through the safe policy. Manual enablement requires verified and healthy state. A dedicated scheduler worker runs the checks every five minutes.
+
+Admin AI is now a deterministic server-side read-only operational assistant. It reads database-backed users, tasks, browser sessions, AI usage and failed-task counts. Mutations cannot be issued through the assistant query endpoint. High-risk actions require a preview and confirmation record tied to the authenticated admin, with expiry and audit logging.
+
+The final deterministic suite passes **145 backend tests**. Frontend tests and production build pass. Local PostgreSQL, Redis and Docker execution remain unavailable in the sandbox, so staging credentials and live provider verification remain external requirements.

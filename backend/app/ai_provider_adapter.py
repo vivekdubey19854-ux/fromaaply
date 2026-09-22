@@ -141,16 +141,22 @@ class MultiAIProviderAdapter:
             provider = self._canonical_provider(provider_name)
             provider_started = time.monotonic()
             try:
+                if request.metadata.get("user_id") and not self._provider_allowed(provider, request):
+                    continue
                 credentials = self._load_credentials(provider)
                 result = self._dispatch(provider, request, credentials, max(0.1, min(request.timeout_seconds, deadline - time.monotonic())))
                 latency_ms = self._elapsed_ms(provider_started)
                 self._record_usage(request, request_id, result, latency_ms, "success", fallback_from=failures[-1][0] if failures else None)
+                if request.metadata.get("user_id"):
+                    self._record_provider_health(provider, success=True)
                 self._audit("provider.success", provider=provider, task=request.task, model=request.model, latency_ms=latency_ms)
                 return result
             except Exception as exc:  # deliberate boundary around third-party SDKs
                 failures.append((provider, exc))
                 transient = self._is_transient(exc)
                 self._record_usage(request, request_id, AIProviderResult(provider, request.model, "", {}, {}, self._elapsed_ms(provider_started)), self._elapsed_ms(provider_started), "failure", error_type=type(exc).__name__)
+                if request.metadata.get("user_id"):
+                    self._record_provider_health(provider, success=False)
                 self._audit(
                     "provider.failure",
                     provider=provider,
@@ -165,6 +171,55 @@ class MultiAIProviderAdapter:
 
         summary = ", ".join(f"{provider}:{type(exc).__name__}" for provider, exc in failures) or "no provider attempted"
         raise AIProviderExhausted(f"AI failover exhausted within budget: {summary}")
+
+    def _provider_allowed(self, provider: str, request: AIRequest) -> bool:
+        """Apply administrator policy and database-backed rate/cooldown limits."""
+        try:
+            policy = self.db.execute(text("SELECT enabled, daily_tokens, monthly_tokens, daily_cost, monthly_cost, requests_per_minute, cooldown_seconds FROM ai_provider_policy WHERE provider = :provider"), {"provider": provider}).mappings().first()
+            if not policy:
+                return True
+            if not policy["enabled"]:
+                return False
+            health = self.db.execute(text("SELECT cooldown_until FROM ai_provider_health WHERE provider = :provider"), {"provider": provider}).mappings().first()
+            if health and health["cooldown_until"]:
+                return False
+            user_id = str(request.metadata["user_id"])
+            usage = self.db.execute(text("""
+                SELECT COALESCE(SUM(total_tokens),0) tokens, COALESCE(SUM(estimated_cost),0) cost,
+                       COUNT(*) FILTER (WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '1 minute') requests
+                FROM ai_usage_ledger WHERE provider=:provider AND user_id=:user_id
+                AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 month'
+            """), {"provider": provider, "user_id": user_id}).mappings().first()
+            if policy["requests_per_minute"] and int(usage["requests"] or 0) >= int(policy["requests_per_minute"]):
+                return False
+            if policy["monthly_tokens"] and int(usage["tokens"] or 0) >= int(policy["monthly_tokens"]):
+                return False
+            if policy["monthly_cost"] and float(usage["cost"] or 0) >= float(policy["monthly_cost"]):
+                return False
+            return True
+        except AIProviderError:
+            raise
+        except Exception:
+            LOGGER.debug("AI provider policy lookup unavailable", exc_info=True)
+            return True
+
+    def _record_provider_health(self, provider: str, *, success: bool) -> None:
+        try:
+            if success:
+                self.db.execute(text("""
+                    INSERT INTO ai_provider_health(provider,status,request_count,last_success_at,updated_at)
+                    VALUES (:provider,'healthy',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                    ON CONFLICT (provider) DO UPDATE SET status='healthy', request_count=ai_provider_health.request_count+1, last_success_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                """), {"provider": provider})
+            else:
+                self.db.execute(text("""
+                    INSERT INTO ai_provider_health(provider,status,error_count,request_count,last_failure_at,updated_at)
+                    VALUES (:provider,'degraded',1,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                    ON CONFLICT (provider) DO UPDATE SET status='degraded', error_count=ai_provider_health.error_count+1, request_count=ai_provider_health.request_count+1, error_rate=(ai_provider_health.error_count+1)::numeric/(ai_provider_health.request_count+1), last_failure_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                """), {"provider": provider})
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
 
     def _enforce_quota(self, user_id: str) -> None:
         """Apply database-backed user and global budget limits before an AI call."""

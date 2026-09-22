@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .auth import require_user_id
 from .config import settings
 from .credential_crypto import encrypt_admin_api_key
 from .database import get_db
+from .payment_service import PaymentService
+from .website_health_service import WebsiteHealthService
 
 router = APIRouter(prefix="/v1/admin", tags=["super-admin"])
 
@@ -387,6 +391,13 @@ def admin_payments(db: Session = Depends(get_db), admin: AdminContext = Depends(
     return [dict(row) for row in rows]
 
 
+@router.post("/payments/reconcile")
+def reconcile_payments(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    matched = PaymentService(db).reconcile_unmatched()
+    expired = PaymentService(db).mark_expired_orders()
+    return {"status": "completed", "matched": matched, "expired": expired, "executed_by": admin.user_id}
+
+
 @router.get("/storage")
 def admin_storage(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
     rows = db.execute(text("SELECT id, provider_name, priority, status FROM multi_cloud_storage_nodes ORDER BY priority")).mappings().all()
@@ -396,6 +407,102 @@ def admin_storage(db: Session = Depends(get_db), admin: AdminContext = Depends(r
 @router.get("/health")
 def admin_health(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
     return {"database": "ok", "checked_at": __import__("datetime").datetime.utcnow().isoformat()}
+
+
+@router.get("/provider-policy")
+def provider_policy(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
+    rows = db.execute(text("SELECT p.provider,p.priority,p.enabled,p.daily_tokens,p.monthly_tokens,p.daily_cost,p.monthly_cost,p.requests_per_minute,p.cooldown_seconds,h.status,h.error_rate,h.last_success_at,h.last_failure_at FROM ai_provider_policy p LEFT JOIN ai_provider_health h USING(provider) ORDER BY p.priority,p.provider")).mappings().all()
+    return [dict(row) for row in rows]
+
+
+class ProviderPolicyRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=80)
+    priority: int = Field(ge=1, le=10000)
+    enabled: bool = True
+    daily_tokens: int | None = Field(default=None, ge=1)
+    monthly_tokens: int | None = Field(default=None, ge=1)
+    daily_cost: Decimal | None = Field(default=None, ge=0)
+    monthly_cost: Decimal | None = Field(default=None, ge=0)
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    cooldown_seconds: int = Field(default=30, ge=1, le=3600)
+
+
+@router.put("/provider-policy")
+def update_provider_policy(body: ProviderPolicyRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    db.execute(text("""INSERT INTO ai_provider_policy(provider,priority,enabled,daily_tokens,monthly_tokens,daily_cost,monthly_cost,requests_per_minute,cooldown_seconds,updated_by,updated_at) VALUES (:provider,:priority,:enabled,:daily_tokens,:monthly_tokens,:daily_cost,:monthly_cost,:rpm,:cooldown,:admin,CURRENT_TIMESTAMP) ON CONFLICT(provider) DO UPDATE SET priority=EXCLUDED.priority,enabled=EXCLUDED.enabled,daily_tokens=EXCLUDED.daily_tokens,monthly_tokens=EXCLUDED.monthly_tokens,daily_cost=EXCLUDED.daily_cost,monthly_cost=EXCLUDED.monthly_cost,requests_per_minute=EXCLUDED.requests_per_minute,cooldown_seconds=EXCLUDED.cooldown_seconds,updated_by=EXCLUDED.updated_by,updated_at=CURRENT_TIMESTAMP"""), {**body.model_dump(), "provider": body.provider.strip().lower(), "rpm": body.requests_per_minute, "cooldown": body.cooldown_seconds, "admin": admin.user_id})
+    db.commit()
+    return {"status": "updated", **body.model_dump()}
+
+
+@router.post("/websites/{website_id}/health-check")
+def website_health_check(website_id: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    return WebsiteHealthService(db).check(website_id)
+
+
+@router.put("/websites/{website_id}/enable")
+def enable_website(website_id: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    row = db.execute(text("SELECT verified, health_status, version FROM website_registry WHERE website_id=:website_id FOR UPDATE"), {"website_id": website_id}).mappings().first()
+    if not row or not row["verified"] or row["health_status"] != "healthy":
+        raise HTTPException(status_code=409, detail="website must be verified and healthy before enablement")
+    db.execute(text("UPDATE website_registry SET enabled=true, updated_at=CURRENT_TIMESTAMP WHERE website_id=:website_id"), {"website_id": website_id})
+    db.commit()
+    return {"website_id": website_id, "enabled": True, "version": row["version"]}
+
+
+@router.put("/websites/{website_id}/disable")
+def disable_website(website_id: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    db.execute(text("UPDATE website_registry SET enabled=false, updated_at=CURRENT_TIMESTAMP WHERE website_id=:website_id"), {"website_id": website_id})
+    db.commit()
+    return {"website_id": website_id, "enabled": False}
+
+
+@router.get("/websites/{website_id}/health-history")
+def website_health_history(website_id: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
+    return [dict(row) for row in db.execute(text("SELECT status,http_status,latency_ms,error_message,checked_at FROM website_health_history WHERE website_id=:website_id ORDER BY checked_at DESC LIMIT 100"), {"website_id": website_id}).mappings().all()]
+
+
+class AdminAssistantRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/assistant/query")
+def admin_assistant_query(body: AdminAssistantRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    """Deterministic read-only operational assistant; it cannot authorize mutations."""
+    from .db_models import AIUsageLedgerRecord, AuthUserRecord, BrowserSessionRecord, FormTaskRecord
+    q = body.query.lower()
+    summary = {"users": int(db.scalar(select(func.count()).select_from(AuthUserRecord)) or 0), "tasks": int(db.scalar(select(func.count()).select_from(FormTaskRecord)) or 0), "browser_sessions": int(db.scalar(select(func.count()).select_from(BrowserSessionRecord)) or 0), "ai_calls": int(db.scalar(select(func.count()).select_from(AIUsageLedgerRecord)) or 0)}
+    if "failure" in q or "failed" in q:
+        summary["failed_tasks"] = int(db.scalar(select(func.count()).select_from(FormTaskRecord).where(FormTaskRecord.state == "failed")) or 0)
+    return {"mode": "read_only", "answer": "Operational data was queried from the database; no action was executed.", "summary": summary, "requested_by": admin.user_id}
+
+
+class AdminActionPreviewRequest(BaseModel):
+    action: str = Field(pattern="^(refund|delete|disable_provider|disable_website|pricing_change|credential_change|mass_communication|destructive_maintenance)$")
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/assistant/preview")
+def admin_action_preview(body: AdminActionPreviewRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    preview_id = str(uuid4())
+    db.execute(text("INSERT INTO admin_action_previews(preview_id,admin_user_id,action,payload_json,status,expires_at,created_at) VALUES (:id,:admin,:action,:payload,'PENDING',:expires,CURRENT_TIMESTAMP)"), {"id": preview_id, "admin": admin.user_id, "action": body.action, "payload": json.dumps(body.payload, sort_keys=True), "expires": datetime.utcnow() + timedelta(minutes=5)})
+    db.commit()
+    return {"preview_id": preview_id, "action": body.action, "status": "PENDING", "expires_in_seconds": 300, "requires_explicit_confirmation": True}
+
+
+@router.post("/assistant/confirm/{preview_id}")
+def confirm_admin_action(preview_id: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    row = db.execute(text("SELECT action,payload_json,status,expires_at FROM admin_action_previews WHERE preview_id=:id AND admin_user_id=:admin FOR UPDATE"), {"id": preview_id, "admin": admin.user_id}).mappings().first()
+    if not row or row["status"] != "PENDING" or row["expires_at"] < datetime.utcnow():
+        raise HTTPException(status_code=409, detail="action preview is missing, expired, or already used")
+    payload = json.loads(row["payload_json"])
+    if row["action"] == "refund":
+        result = PaymentService(db).request_refund(transaction_id=str(payload.get("transaction_id", "")), admin_user_id=admin.user_id, reason=str(payload.get("reason", "admin-approved refund")))
+    else:
+        # Destructive actions are intentionally preview-only until a dedicated policy service exists.
+        raise HTTPException(status_code=409, detail="this high-risk action has no executable policy handler")
+    db.execute(text("UPDATE admin_action_previews SET status='EXECUTED',confirmed_at=CURRENT_TIMESTAMP WHERE preview_id=:id"), {"id": preview_id})
+    db.commit()
+    return {"status": "EXECUTED", "action": row["action"], "result": result}
 
 
 @router.get("/websites")

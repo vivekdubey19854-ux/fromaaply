@@ -154,6 +154,21 @@ class RazorpayGatewayService:
             raise RazorpaySignatureError("invalid Razorpay checkout signature") from exc
         return True
 
+    def refund_payment(self, *, payment_id: str, amount_in_paise: int, notes: Mapping[str, str] | None = None) -> str:
+        payment_id = str(payment_id).strip()
+        if not payment_id or int(amount_in_paise) <= 0:
+            raise ValueError("payment_id and positive refund amount are required")
+        credentials = self._load_credentials()
+        client = self.client_factory((credentials.key_id, credentials.key_secret))
+        try:
+            response = client.payment.refund(payment_id, {"amount": int(amount_in_paise), "notes": dict(notes or {})})
+        except Exception as exc:
+            raise RazorpayGatewayError("Razorpay refund request failed") from exc
+        refund_id = str(response.get("id", "")).strip() if isinstance(response, Mapping) else ""
+        if not refund_id:
+            raise RazorpayGatewayError("Razorpay did not return a refund id")
+        return refund_id
+
     def _load_credentials(self) -> RazorpayCredentials:
         dialect = getattr(getattr(self.db, "bind", None), "dialect", None)
         query = "SELECT provider_name, api_key_encrypted, is_active FROM admin_api_keys WHERE provider_name = :provider"

@@ -45,6 +45,7 @@ class WebsiteRegistryRecord(Base):
     allowed_paths_json: Mapped[str] = mapped_column(Text, default="[]")
     supported_fields_json: Mapped[str] = mapped_column(Text, default="[]")
     mapping_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

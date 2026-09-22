@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -150,6 +151,41 @@ class PaymentService:
         if commit:
             self.db.commit()
         return "FAILED"
+
+    def mark_expired_orders(self, *, older_than_minutes: int = 30) -> int:
+        result = self.db.execute(text("UPDATE transactions SET status='EXPIRED', updated_at=CURRENT_TIMESTAMP WHERE status IN ('PENDING','PROCESSING') AND created_at < CURRENT_TIMESTAMP - (:minutes * INTERVAL '1 minute')"), {"minutes": older_than_minutes})
+        self.db.commit()
+        return int(result.rowcount or 0)
+
+    def retry_payment(self, *, transaction_id: str) -> dict[str, Any]:
+        row = self.db.execute(text("SELECT transaction_id, status, razorpay_order_id FROM transactions WHERE transaction_id=:transaction_id FOR UPDATE"), {"transaction_id": transaction_id}).mappings().first()
+        if not row:
+            raise PaymentOrderNotFound("transaction not found")
+        if row["status"] not in {"FAILED", "EXPIRED"}:
+            raise PaymentStateConflict("only failed or expired orders can be retried")
+        self.db.execute(text("UPDATE transactions SET status='PENDING', razorpay_payment_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE transaction_id=:transaction_id"), {"transaction_id": transaction_id})
+        self.db.execute(text("INSERT INTO payment_attempts(attempt_id,transaction_id,status,created_at) VALUES (:id,:transaction_id,'RETRY_PENDING',CURRENT_TIMESTAMP)"), {"id": str(uuid4()), "transaction_id": transaction_id})
+        self.db.commit()
+        return {"transaction_id": str(transaction_id), "status": "PENDING", "razorpay_order_id": row["razorpay_order_id"]}
+
+    def request_refund(self, *, transaction_id: str, admin_user_id: str, reason: str, amount_credits: Decimal | None = None) -> dict[str, Any]:
+        row = self.db.execute(text("SELECT transaction_id, user_id, credits_added, status FROM transactions WHERE transaction_id=:transaction_id FOR UPDATE"), {"transaction_id": transaction_id}).mappings().first()
+        if not row or row["status"] != "SUCCESS":
+            raise PaymentStateConflict("only successful transactions can be refunded")
+        amount = self._decimal(amount_credits if amount_credits is not None else row["credits_added"])
+        already = self.db.execute(text("SELECT COALESCE(SUM(amount_credits),0) amount FROM payment_refunds WHERE transaction_id=:transaction_id AND status IN ('REQUESTED','SUCCESS')"), {"transaction_id": transaction_id}).mappings().first()
+        if self._decimal(already["amount"] if already else 0) + amount > self._decimal(row["credits_added"]):
+            raise PaymentStateConflict("refund exceeds credited amount")
+        refund_id = str(uuid4())
+        self.db.execute(text("INSERT INTO payment_refunds(refund_id,transaction_id,amount_credits,status,reason,created_by,created_at,updated_at) VALUES (:refund_id,:transaction_id,:amount,'REQUESTED',:reason,:admin,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"), {"refund_id": refund_id, "transaction_id": transaction_id, "amount": amount, "reason": reason[:500], "admin": admin_user_id})
+        self.db.execute(text("INSERT INTO audit_logs(id,user_id,action,resource_type,resource_id,created_at,details) VALUES (:id,:user_id,'PAYMENT_REFUND_REQUESTED','payment_refund',:resource_id,CURRENT_TIMESTAMP,:details)"), {"id": str(uuid4()), "user_id": admin_user_id, "resource_id": refund_id, "details": '{"sensitive":false}'})
+        self.db.commit()
+        return {"refund_id": refund_id, "transaction_id": str(transaction_id), "status": "REQUESTED", "amount_credits": str(amount)}
+
+    def reconcile_unmatched(self) -> int:
+        result = self.db.execute(text("INSERT INTO payment_reconciliation(reconciliation_id,provider_event_id,transaction_id,status,details,created_at) SELECT :prefix || razorpay_order_id, razorpay_order_id, transaction_id, 'MATCHED', '{\"source\":\"ledger\"}', CURRENT_TIMESTAMP FROM transactions WHERE razorpay_order_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM payment_reconciliation r WHERE r.provider_event_id=transactions.razorpay_order_id)"), {"prefix": str(uuid4()) + '-'})
+        self.db.commit()
+        return int(result.rowcount or 0)
 
     def mark_receipt_sent(self, transaction_id: str) -> None:
         self.db.execute(text("UPDATE transactions SET receipt_sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE transaction_id = :transaction_id AND status = 'SUCCESS' AND receipt_sent_at IS NULL"), {"transaction_id": str(transaction_id)})

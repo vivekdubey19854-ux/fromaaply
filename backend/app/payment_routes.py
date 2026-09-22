@@ -31,6 +31,10 @@ class VerifyPaymentRequest(BaseModel):
     amount_in_paise: int = Field(gt=0)
 
 
+class RetryPaymentRequest(BaseModel):
+    transaction_id: str = Field(min_length=8, max_length=100)
+
+
 @router.post("/orders")
 def create_payment_order(
     body: CreatePaymentOrderRequest,
@@ -64,6 +68,18 @@ def verify_payment(body: VerifyPaymentRequest, db: Session = Depends(get_db), us
         db.rollback()
         raise HTTPException(status_code=400, detail="payment verification or settlement failed") from exc
     return {"status": result.status, "transaction_id": result.transaction_id, "credits_added": str(result.credits_added), "wallet_balance": str(result.wallet_balance_credits)}
+
+
+@router.post("/retry")
+def retry_payment(body: RetryPaymentRequest, db: Session = Depends(get_db), user_id: str = Depends(require_user_id)) -> dict[str, Any]:
+    owner = db.execute(text("SELECT user_id FROM transactions WHERE transaction_id=:transaction_id"), {"transaction_id": body.transaction_id}).scalar()
+    if str(owner) != user_id:
+        raise HTTPException(status_code=404, detail="payment not found")
+    try:
+        return PaymentService(db).retry_payment(transaction_id=body.transaction_id)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="payment cannot be retried") from exc
 
 
 @router.post("/razorpay/webhook", status_code=200)

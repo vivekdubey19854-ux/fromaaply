@@ -28,6 +28,12 @@ services:
     env_file: .env.production
     depends_on: {api: {condition: service_healthy}}
     stop_grace_period: 30s
+  website-health:
+    build: {context: ., dockerfile: Dockerfile.api}
+    restart: unless-stopped
+    env_file: .env.production
+    command: ["python", "-m", "app.website_health_worker"]
+    depends_on: {api: {condition: service_healthy}}
   frontend:
     build: {context: ., dockerfile: Dockerfile.frontend}
     restart: unless-stopped
