@@ -4,7 +4,7 @@ import './admin-dashboard.css';
 type AdminTab = 'cockpit' | 'vault' | 'growth';
 type Provider = { name: string; short: string; tier: string; masked: string; latency: string; configured: boolean };
 type UserRow = { id: string; name: string; plan: string; credits: number; status: string; spend: string; lastJob: string };
-type AdminSummary = { users:number; websites:number; enabled_websites:number; audit_events:number };
+type AdminSummary = { users:number; websites:number; enabled_websites:number; audit_events:number; tasks?:number; browser_sessions?:number; ai_usage?:number };
 
 const API = localStorage.getItem('formwise_api') || 'http://localhost:8000';
 const adminToken = () => localStorage.getItem('formwise_access_token') || localStorage.getItem('formwise_admin_token') || '';
@@ -29,6 +29,7 @@ const AUTH_GATEWAYS = [
 ];
 
 const INITIAL_USERS: UserRow[] = [];
+const EMPTY_USER: UserRow = { id:'unavailable', name:'No live user selected', plan:'—', credits:0, status:'unavailable', spend:'—', lastJob:'—' };
 
 const formatInr = (value: number) => new Intl.NumberFormat('en-IN', { style:'currency', currency:'INR', maximumFractionDigits:0 }).format(value);
 
@@ -83,6 +84,7 @@ export default function AdminDashboard() {
   const [refundSearch, setRefundSearch] = useState('USR-92105');
   const [refundState, setRefundState] = useState<'idle'|'success'|'error'>('idle');
   const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [aiUsage, setAiUsage] = useState<{total_tokens:number; total_cost:string}>({total_tokens:0, total_cost:'0'});
 
   useEffect(() => {
     localStorage.setItem('formwise_maintenance_mode', String(maintenance));
@@ -90,10 +92,19 @@ export default function AdminDashboard() {
   }, [maintenance]);
 
   useEffect(() => {
-    adminRequest<AdminSummary>('/v1/admin/summary').then(setSummary).catch(error => setStatus(error instanceof Error ? error.message : 'Admin summary unavailable.'));
+    Promise.all([
+      adminRequest<AdminSummary>('/v1/admin/summary'),
+      adminRequest<{records:unknown[]; total_tokens:number; total_cost:string}>('/v1/admin/ai-usage'),
+      adminRequest<Array<{user_id:string; email:string; status:string; role:string}>>('/v1/admin/users'),
+    ]).then(([liveSummary, liveUsage, liveUsers]) => {
+      setSummary(liveSummary);
+      setAiUsage({total_tokens: liveUsage.total_tokens, total_cost: liveUsage.total_cost});
+      setUsers(liveUsers.map(user => ({id:user.user_id, name:user.email, plan:user.role, credits:0, status:user.status, spend:'—', lastJob:'—'})));
+      setStatus('LIVE DATABASE TELEMETRY CONNECTED');
+    }).catch(error => setStatus(error instanceof Error ? error.message : 'Admin telemetry unavailable.'));
   }, []);
 
-  const selectedUser = useMemo(() => users.find(u => u.id === refundSearch) || users[0], [refundSearch, users]);
+  const selectedUser = useMemo(() => users.find(u => u.id === refundSearch) || users[0] || EMPTY_USER, [refundSearch, users]);
 
   const pushLog = (line:string) => setLogs(current => [...current, `[${new Date().toLocaleTimeString('en-GB')}] ${line}`]);
 
@@ -193,17 +204,18 @@ export default function AdminDashboard() {
       </section>
 
       {tab === 'cockpit' && <section className="space-y-5">
-        <div className="grid gap-4 xl:grid-cols-4">
+        <div className="grid gap-4 xl:grid-cols-5">
           <Metric label="REGISTERED USERS" value={summary ? summary.users.toLocaleString('en-IN') : '—'} note={summary ? `${summary.audit_events.toLocaleString('en-IN')} audit events recorded` : 'Waiting for authenticated admin API'} />
           <Metric label="WEBSITE REGISTRY" value={summary ? `${summary.enabled_websites} / ${summary.websites}` : '—'} note="Enabled / registered websites" accent="cyan" />
-          <Metric label="REVENUE (MTD)" value="—" note="Payment ledger endpoint not connected" />
-          <Metric label="SYSTEM HEALTH" value="API" note="Worker, storage and provider probes required" accent="cyan" />
+          <Metric label="AI TOKENS" value={aiUsage.total_tokens.toLocaleString('en-IN')} note={`Recorded cost ${aiUsage.total_cost}`} accent="cyan" />
+          <Metric label="TASKS" value={summary ? String(summary.tasks ?? '—') : '—'} note="Database-backed task count" />
+          <Metric label="SYSTEM HEALTH" value={status.includes('LIVE') ? 'LIVE' : '—'} note="Readiness and admin API telemetry" accent="cyan" />
         </div>
         <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
           <div className="fw-panel"><SectionHeader eyebrow="USER MATRIX DATA TABLE" title="User Ledger · Real-Time" action={<span className="fw-chip">{users.length} USERS IN VIEW</span>} />
             <div className="overflow-x-auto"><table className="fw-table"><thead><tr><th>USER</th><th>PLAN</th><th>CREDITS</th><th>STATUS</th><th>SPEND</th><th>LAST JOB</th><th>ACTION</th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><strong>{user.name}</strong><small>{user.id}</small></td><td>{user.plan}</td><td className="fw-number">{user.credits.toLocaleString('en-IN')}</td><td><span className={`fw-state ${user.status === 'WATCH' ? 'watch':''}`}>{user.status}</span></td><td>{user.spend}</td><td>{user.lastJob}</td><td><div className="flex gap-2"><button disabled={busyAction===`bonus:${user.id}`} onClick={()=>grantBonus(user)} className="fw-pill">{busyAction===`bonus:${user.id}`?'…':'Grant Bonus'}</button><button disabled={busyAction===`refund:${user.id}`} onClick={()=>triggerRefund(user)} className="fw-pill fw-pill-cyan">{busyAction===`refund:${user.id}`?'…':'Trigger Refund'}</button></div></td></tr>)}</tbody></table></div>
           </div>
-          <div className="fw-panel"><SectionHeader eyebrow="ZERO-TRUST GUARD & INTEGRITY" title="System Health" action={<span className="fw-state">ALL SYSTEMS OPERATIONAL</span>} /><div className="fw-health-grid"><div><span>Attestation</span><strong>SHA256:7f9a...c03b</strong></div><div><span>AI provider vault</span><strong>AES-256 / HSM</strong></div><div><span>Plaintext leakage</span><strong>0 detected</strong></div><div><span>Worker isolation</span><strong>Headless Chromium</strong></div></div><div className="fw-health-meter"><div><span>CPU · 38%</span><i style={{width:'38%'}} /></div><div><span>Memory · 57%</span><i style={{width:'57%'}} /></div><div><span>QPS · 124/s</span><i style={{width:'76%'}} /></div></div></div>
+          <div className="fw-panel"><SectionHeader eyebrow="ZERO-TRUST GUARD & INTEGRITY" title="System Health" action={<span className="fw-state">{status}</span>} /><div className="fw-health-grid"><div><span>Database</span><strong>Admin API checked</strong></div><div><span>AI usage ledger</span><strong>{aiUsage.total_tokens.toLocaleString('en-IN')} tokens</strong></div><div><span>Browser sessions</span><strong>{summary?.browser_sessions ?? '—'}</strong></div><div><span>Tasks</span><strong>{summary?.tasks ?? '—'}</strong></div></div><div className="fw-health-meter"><div><span>Metrics</span><i style={{width:summary ? '100%':'15%'}} /></div></div></div>
         </div>
       </section>}
 
