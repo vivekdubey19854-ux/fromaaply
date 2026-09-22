@@ -58,3 +58,16 @@ Until these steps are completed, the correct product label is **secure beta foun
 ## References
 
 [1]: https://github.com/vivekdubey19854-ux/fromaaply "Formwise repository"
+
+
+## Production completion addendum — 2026-09-22
+
+The repository now includes a durable `ai_usage_ledger` with provider, model, request, task, user, token, latency, status, fallback and estimated-cost fields. The adapter applies a daily token and cost guard before eligible user calls and records successful and failed provider attempts. Migration `0013_ai_usage_ledger` is the schema authority.
+
+Migration `0014_registry_production` adds verified status, version, health status, health-check timestamps, allowed paths, supported fields and mapping metadata. It seeds only official HTTPS domains for SSC, UPSC, National Scholarship Portal and NTA. Newly created registry records remain disabled and unverified until administrator verification.
+
+The admin API now exposes live users, AI usage, tasks, browser sessions, payments, storage nodes, audit logs, websites, summary counts and health. The dashboard consumes live summary, user and AI usage APIs and displays unavailable states instead of fabricated operational metrics.
+
+Production container files are present at the repository root, with PostgreSQL, Redis authentication, API, durable worker/browser worker and frontend services in `docker-compose.production.yml`. The deployment package includes `.env.production.example`, Nginx routing, backup validation, CI PostgreSQL/Redis services and `docs/DEPLOYMENT.md`.
+
+The local verification result is **142 backend tests passed**, **4 frontend tests passed**, a successful frontend production build, successful Python compilation, one Alembic head at `0014_registry_production`, and no Alembic drift. Docker, PostgreSQL and Redis could not be executed in this sandbox because their local daemons/CLI are unavailable. Real credential and staging validation therefore remains an external release requirement rather than a claimed local completion.

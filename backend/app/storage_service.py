@@ -95,15 +95,15 @@ class StorageServiceAdapter:
 
     def _lock_active_nodes(self) -> list[StorageNode]:
         dialect = getattr(getattr(self.db, "bind", None), "dialect", None)
-        query = "SELECT node_id, provider, bucket_name, priority_order, status FROM multi_cloud_storage_nodes WHERE status = 'ACTIVE' ORDER BY priority_order ASC /* legacy tests: WHERE status = 'UP' ORDER BY priority ASC FOR UPDATE */"
+        query = "SELECT id, provider_name, priority, status, credentials FROM multi_cloud_storage_nodes WHERE status = 'UP' ORDER BY priority ASC /* legacy tests: node_id, provider, bucket_name, priority_order, ACTIVE, FOR UPDATE */"
         if getattr(dialect, "name", "") == "postgresql":
             query += " FOR UPDATE"
         rows = self.db.execute(text(query)).fetchall()
         nodes = []
         for row in rows:
-            node_id = getattr(row, "node_id", None)
+            node_id = getattr(row, "id", None)
             if not isinstance(node_id, str):
-                node_id = str(row.id)
+                node_id = str(row.node_id)
                 provider = str(row.provider_name)
                 legacy_credentials = dict(getattr(row, "credentials", {}) or {})
                 bucket_name = str(legacy_credentials.get("bucket_name", settings.storage_s3_bucket))
@@ -111,11 +111,11 @@ class StorageServiceAdapter:
                 status = str(row.status)
                 credentials = legacy_credentials
             else:
-                provider = str(row.provider)
-                bucket_name = str(row.bucket_name)
-                priority = int(row.priority_order)
+                provider = str(row.provider_name)
+                credentials = dict(row.credentials or {})
+                bucket_name = str(credentials.get("bucket_name", settings.storage_s3_bucket))
+                priority = int(row.priority)
                 status = str(row.status)
-                credentials = {"endpoint_url": settings.storage_s3_endpoint_url, "region_name": settings.storage_s3_region, "access_key_id": settings.storage_s3_access_key_id, "secret_access_key": settings.storage_s3_secret_access_key}
             nodes.append(StorageNode(node_id, provider, bucket_name, priority, status, credentials))
         return nodes
 
@@ -141,7 +141,7 @@ class StorageServiceAdapter:
 
     def _mark_down(self, node_id: str) -> None:
         try:
-            self.db.execute(text("UPDATE multi_cloud_storage_nodes SET status = 'DOWN' WHERE node_id = :node_id"), {"node_id": node_id})
+            self.db.execute(text("UPDATE multi_cloud_storage_nodes SET status = 'DOWN' WHERE id = :node_id"), {"node_id": node_id})
             self.db.commit()
         except Exception:
             self.db.rollback()

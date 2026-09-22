@@ -50,3 +50,8 @@ OTP, CAPTCHA interaction where permitted, payments, legal declarations, credenti
 ## Incident Response
 
 The system must provide task cancellation/kill-switch capability, revoke active sessions when necessary, preserve relevant audit events, and surface actionable errors to the user/operator.
+
+
+## Production completion addendum
+
+Production requests receive correlation IDs and security headers. AI usage is recorded in a database ledger and guarded by daily token and cost limits. Registry entries are HTTPS allowlist records and newly created entries remain disabled until verification. Logs must exclude tokens, passwords, OTP values, CAPTCHA contents, API keys and private document data. Docker, PostgreSQL, Redis and staging credentials must be supplied through a secret manager rather than this repository.

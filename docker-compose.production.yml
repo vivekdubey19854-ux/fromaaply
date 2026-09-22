@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [formwise_pg:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}'], interval: 10s, timeout: 5s, retries: 5}
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes: [formwise_redis:/data]
+    healthcheck: {test: [CMD, redis-cli, -a, "${REDIS_PASSWORD}", ping], interval: 10s, timeout: 5s, retries: 5}
+  api:
+    build: {context: ., dockerfile: Dockerfile.api}
+    image: formwise-api:latest
+    restart: unless-stopped
+    env_file: .env.production
+    command: sh -c 'alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers'
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    healthcheck: {test: [CMD, curl, -f, http://localhost:8000/ready], interval: 15s, timeout: 5s, retries: 5}
+  worker:
+    build: {context: ., dockerfile: Dockerfile.worker}
+    restart: unless-stopped
+    env_file: .env.production
+    depends_on: {api: {condition: service_healthy}}
+    stop_grace_period: 30s
+  frontend:
+    build: {context: ., dockerfile: Dockerfile.frontend}
+    restart: unless-stopped
+    ports: ["${FRONTEND_PORT:-8080}:80"]
+    depends_on: {api: {condition: service_healthy}}
+volumes:
+  formwise_pg:
+  formwise_redis:

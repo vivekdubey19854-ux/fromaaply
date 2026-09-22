@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq5 curl && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && playwright install --with-deps chromium
+COPY backend ./backend
+WORKDIR /app/backend
+RUN useradd --create-home --uid 10001 formwise && chown -R formwise:formwise /app
+USER formwise
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

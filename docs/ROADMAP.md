@@ -92,3 +92,8 @@
 
 ### Rule
 No phase is considered complete until its acceptance criteria and tests pass. The next phase starts only after review of the previous phase.
+
+
+## Release status — 2026-09-22
+
+The secure beta foundation and production-completion code pass are implemented and locally tested. AI usage ledger/quota, official registry metadata, admin operational APIs, deployment manifests, backup tooling and CI service definitions are complete in the repository. The staging release remains gated on real PostgreSQL, Redis, AI, S3-compatible storage, email and Razorpay credentials, followed by safe browser smoke tests that stop before final submit.

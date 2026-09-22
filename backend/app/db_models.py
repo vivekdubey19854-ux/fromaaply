@@ -37,6 +37,14 @@ class WebsiteRegistryRecord(Base):
     allowed_domains_json: Mapped[str] = mapped_column(Text, default="[]")
     enabled: Mapped[bool] = mapped_column(default=False)
     config_json: Mapped[str] = mapped_column(Text, default="{}")
+    verified: Mapped[bool] = mapped_column(default=False)
+    version: Mapped[str] = mapped_column(String(40), default="1.0.0")
+    health_status: Mapped[str] = mapped_column(String(30), default="unknown")
+    last_health_check: Mapped[datetime | None] = mapped_column(DateTime)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    allowed_paths_json: Mapped[str] = mapped_column(Text, default="[]")
+    supported_fields_json: Mapped[str] = mapped_column(Text, default="[]")
+    mapping_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -195,3 +203,23 @@ class TaskLockRecord(Base):
     owner_id: Mapped[str] = mapped_column(String(120))
     locked_until: Mapped[datetime] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AIUsageLedgerRecord(Base):
+    __tablename__ = "ai_usage_ledger"
+    usage_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    provider: Mapped[str] = mapped_column(String(80), index=True)
+    model: Mapped[str] = mapped_column(String(160))
+    request_id: Mapped[str] = mapped_column(String(80), index=True)
+    task_name: Mapped[str] = mapped_column(String(100))
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    fallback_from: Mapped[str | None] = mapped_column(String(80))
+    estimated_cost: Mapped[float] = mapped_column(default=0)
+    error_type: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

@@ -1,0 +1,3 @@
+FROM formwise-api:latest
+WORKDIR /app/backend
+CMD ["python", "-m", "app.task_worker"]

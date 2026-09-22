@@ -113,3 +113,8 @@ If any condition is missing, the system pauses or asks the user.
 Expected failures include expired sessions, website layout changes, missing data, ambiguous fields, OCR errors, network failures, browser crashes, provider failures, and policy denial.
 
 Tasks must support safe pause, retry where appropriate, recovery, cancellation, and clear user-facing errors.
+
+
+## Production completion addendum
+
+PostgreSQL is the durable authority for task recovery, AI usage accounting, registry metadata and audit state. Redis carries queue messages but never replaces database state. The worker owns Playwright contexts and uses lease ownership for mutations. The production topology is API, worker/browser worker, PostgreSQL, Redis and a static frontend. Provider credentials are encrypted and injected through deployment secrets.

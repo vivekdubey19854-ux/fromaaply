@@ -1,0 +1,43 @@
+name: Production Validation
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: formwise, POSTGRES_PASSWORD: formwise, POSTGRES_DB: formwise}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U formwise -d formwise"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      DATABASE_URL: postgresql+psycopg://formwise:formwise@localhost:5432/formwise
+      REDIS_URL: redis://localhost:6379/0
+      PYTHONPATH: .
+      FORMWISE_ENVIRONMENT: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r backend/requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - working-directory: backend
+        run: alembic upgrade head
+      - working-directory: backend
+        run: pytest -q
+      - working-directory: backend
+        run: python -m compileall -q app && alembic check
+      - run: git diff --check
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - working-directory: frontend
+        run: npm install --no-audit --no-fund && npm test -- --run && npm run build

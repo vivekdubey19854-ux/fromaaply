@@ -4,7 +4,7 @@ import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,9 +19,32 @@ from app.db_models import AddressRecord, AuditLogRecord, DocumentRecord, Educati
 from app.document_intelligence import extract_document
 from app.security import sha256_bytes, validate_upload
 from app.storage import PrivateStorage
+from app.storage_service import StorageServiceAdapter, StorageUploadError
 
 router = APIRouter(prefix="/v1", tags=["profile-vault"])
 storage = PrivateStorage(settings.storage_root)
+
+
+def _object_key(user_id: str, key: str) -> str:
+    return f"users/{user_id}/{key}" if settings.environment == "production" else key
+
+
+def _save_object(db: Session, user_id: str, key: str, data: bytes, content_type: str) -> str:
+    if settings.environment == "production":
+        return StorageServiceAdapter(db).upload_bytes(object_key=_object_key(user_id, key), data=data, content_type=content_type)
+    storage.save(user_id, key, data)
+    return key
+
+
+def _read_object(db: Session, user_id: str, key: str) -> bytes:
+    return StorageServiceAdapter(db).download_bytes(object_key=key) if settings.environment == "production" else storage.read(user_id, key)
+
+
+def _delete_object(db: Session, user_id: str, key: str) -> None:
+    if settings.environment == "production":
+        StorageServiceAdapter(db).delete_object(object_key=key)
+    else:
+        storage.delete(user_id, key)
 
 
 def ensure_profile(db: Session, user_id: str) -> ProfileRecord:
@@ -107,13 +130,22 @@ async def upload_document(file: UploadFile = File(...), user_id: str = Depends(r
     data = b"".join(chunks)
     try: validate_upload(file.filename or "", content_type, total, max_size)
     except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
-    digest = sha256_bytes(data); storage_key = f"{secrets.token_hex(16)}-{digest}.bin"
-    storage.save(user_id, storage_key, data)
+    digest = sha256_bytes(data); storage_key = _object_key(user_id, f"{secrets.token_hex(16)}-{digest}.bin")
+    try:
+        if settings.environment == "production":
+            StorageServiceAdapter(db).upload_bytes(object_key=storage_key, data=data, content_type=content_type, checksum_sha256=digest)
+        else:
+            storage.save(user_id, storage_key, data)
+    except StorageUploadError as exc:
+        raise HTTPException(status_code=503, detail="document storage is temporarily unavailable") from exc
     record = DocumentRecord(user_id=user_id, original_filename=safe_filename(file.filename or "document"), storage_key=storage_key, content_type=content_type, size_bytes=total, sha256=digest, status="uploaded")
     try:
         db.add(record); db.flush(); audit(db, user_id, "document.uploaded", "document", record.id); db.commit(); db.refresh(record)
     except Exception:
-        db.rollback(); storage.delete(user_id, storage_key); raise
+        db.rollback()
+        try: _delete_object(db, user_id, storage_key)
+        except Exception: pass
+        raise
     return record
 
 
@@ -135,9 +167,13 @@ def extract_document_endpoint(document_id: str, user_id: str = Depends(require_u
     row = db.scalar(select(DocumentRecord).where(DocumentRecord.id == document_id, DocumentRecord.user_id == user_id, DocumentRecord.status != "deleted"))
     if row is None: raise HTTPException(status_code=404, detail="document not found")
     try:
-        data = storage.read(user_id, row.storage_key)
+        data = _read_object(db, user_id, row.storage_key)
         result = extract_document(data, row.content_type, row.original_filename)
-        storage.save_json(user_id, extraction_key(row), result)
+        extraction_data = __import__("json").dumps(result, separators=(",", ":")).encode()
+        if settings.environment == "production":
+            StorageServiceAdapter(db).upload_bytes(object_key=extraction_key(row), data=extraction_data, content_type="application/json")
+        else:
+            storage.save_json(user_id, extraction_key(row), result)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     audit(db, user_id, "document.extracted", "document", document_id); db.commit()
@@ -148,17 +184,23 @@ def extract_document_endpoint(document_id: str, user_id: str = Depends(require_u
 def get_extraction(document_id: str, user_id: str = Depends(require_user_id), db: Session = Depends(get_db)):
     row = db.scalar(select(DocumentRecord).where(DocumentRecord.id == document_id, DocumentRecord.user_id == user_id, DocumentRecord.status != "deleted"))
     if row is None: raise HTTPException(status_code=404, detail="document not found")
-    try: return storage.read_json(user_id, extraction_key(row))
-    except FileNotFoundError: raise HTTPException(status_code=404, detail="document has not been extracted")
+    try:
+        if settings.environment == "production":
+            return __import__("json").loads(_read_object(db, user_id, extraction_key(row)))
+        return storage.read_json(user_id, extraction_key(row))
+    except (FileNotFoundError, StorageUploadError, ValueError): raise HTTPException(status_code=404, detail="document has not been extracted")
 
 
 @router.get("/documents/{document_id}/download")
 def download_document(document_id: str, user_id: str = Depends(require_user_id), db: Session = Depends(get_db)):
     row = db.scalar(select(DocumentRecord).where(DocumentRecord.id == document_id, DocumentRecord.user_id == user_id, DocumentRecord.status != "deleted"))
     if row is None: raise HTTPException(status_code=404, detail="document not found")
+    audit(db, user_id, "document.downloaded", "document", document_id); db.commit()
+    if settings.environment == "production":
+        try: return RedirectResponse(StorageServiceAdapter(db).presigned_download_url(object_key=row.storage_key), status_code=307)
+        except StorageUploadError as exc: raise HTTPException(status_code=503, detail="document storage is temporarily unavailable") from exc
     try: data = storage.read(user_id, row.storage_key)
     except FileNotFoundError as exc: raise HTTPException(status_code=404, detail="document content not found") from exc
-    audit(db, user_id, "document.downloaded", "document", document_id); db.commit()
     return Response(content=data, media_type=row.content_type, headers={"Content-Disposition": f'attachment; filename="{safe_filename(row.original_filename)}"'})
 
 
@@ -166,8 +208,8 @@ def download_document(document_id: str, user_id: str = Depends(require_user_id),
 def delete_document(document_id: str, user_id: str = Depends(require_user_id), db: Session = Depends(get_db)):
     row = db.scalar(select(DocumentRecord).where(DocumentRecord.id == document_id, DocumentRecord.user_id == user_id))
     if row is None: raise HTTPException(status_code=404, detail="document not found")
-    storage.delete(user_id, row.storage_key)
-    try: storage.delete(user_id, extraction_key(row))
+    _delete_object(db, user_id, row.storage_key)
+    try: _delete_object(db, user_id, extraction_key(row))
     except ValueError: pass
     row.status = "deleted"; audit(db, user_id, "document.deleted", "document", document_id); db.commit()
     return {"deleted": True}

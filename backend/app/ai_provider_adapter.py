@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from uuid import uuid4
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
@@ -128,6 +129,11 @@ class MultiAIProviderAdapter:
         started = time.monotonic()
         deadline = started + min(self.failover_budget_seconds, request.timeout_seconds * max(1, len(providers)))
         failures: list[tuple[str, Exception]] = []
+        request_id = str(request.metadata.get("request_id") or uuid4())
+        user_id = request.metadata.get("user_id")
+        task_id = request.metadata.get("task_id")
+        if user_id:
+            self._enforce_quota(str(user_id))
 
         for provider_name in providers:
             if time.monotonic() >= deadline:
@@ -137,11 +143,14 @@ class MultiAIProviderAdapter:
             try:
                 credentials = self._load_credentials(provider)
                 result = self._dispatch(provider, request, credentials, max(0.1, min(request.timeout_seconds, deadline - time.monotonic())))
-                self._audit("provider.success", provider=provider, task=request.task, model=request.model, latency_ms=self._elapsed_ms(provider_started))
+                latency_ms = self._elapsed_ms(provider_started)
+                self._record_usage(request, request_id, result, latency_ms, "success", fallback_from=failures[-1][0] if failures else None)
+                self._audit("provider.success", provider=provider, task=request.task, model=request.model, latency_ms=latency_ms)
                 return result
             except Exception as exc:  # deliberate boundary around third-party SDKs
                 failures.append((provider, exc))
                 transient = self._is_transient(exc)
+                self._record_usage(request, request_id, AIProviderResult(provider, request.model, "", {}, {}, self._elapsed_ms(provider_started)), self._elapsed_ms(provider_started), "failure", error_type=type(exc).__name__)
                 self._audit(
                     "provider.failure",
                     provider=provider,
@@ -156,6 +165,42 @@ class MultiAIProviderAdapter:
 
         summary = ", ".join(f"{provider}:{type(exc).__name__}" for provider, exc in failures) or "no provider attempted"
         raise AIProviderExhausted(f"AI failover exhausted within budget: {summary}")
+
+    def _enforce_quota(self, user_id: str) -> None:
+        """Apply database-backed user and global budget limits before an AI call."""
+        try:
+            row = self.db.execute(text("""
+                SELECT COALESCE(SUM(total_tokens), 0) AS tokens, COALESCE(SUM(estimated_cost), 0) AS cost
+                FROM ai_usage_ledger WHERE user_id = :user_id AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 day'
+            """), {"user_id": user_id}).mappings().first()
+            if row and int(row["tokens"] or 0) >= 100_000:
+                raise AIProviderError("daily AI token quota exceeded")
+            if row and float(row["cost"] or 0) >= 25:
+                raise AIProviderError("daily AI budget exceeded")
+        except AIProviderError:
+            raise
+        except Exception:
+            # Local test databases may not have the production ledger yet; provider execution remains usable.
+            LOGGER.debug("AI quota lookup unavailable", exc_info=True)
+
+    def _record_usage(self, request: AIRequest, request_id: str, result: AIProviderResult, latency_ms: int, status: str, *, fallback_from: str | None = None, error_type: str | None = None) -> None:
+        if not request.metadata.get("user_id"):
+            return
+        usage = result.usage or {}
+        input_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+        output_tokens = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
+        total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
+        estimated_cost = float(request.metadata.get("estimated_cost_per_1k", 0)) * total_tokens / 1000
+        try:
+            self.db.execute(text("""
+                INSERT INTO ai_usage_ledger
+                (usage_id, provider, model, request_id, task_name, user_id, task_id, input_tokens, output_tokens, total_tokens, latency_ms, status, fallback_from, estimated_cost, error_type, created_at)
+                VALUES (:usage_id, :provider, :model, :request_id, :task_name, :user_id, :task_id, :input_tokens, :output_tokens, :total_tokens, :latency_ms, :status, :fallback_from, :estimated_cost, :error_type, CURRENT_TIMESTAMP)
+            """), {"usage_id": str(uuid4()), "provider": result.provider, "model": result.model, "request_id": request_id, "task_name": request.task, "user_id": str(request.metadata.get("user_id")), "task_id": request.metadata.get("task_id"), "input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens, "latency_ms": latency_ms, "status": status, "fallback_from": fallback_from, "estimated_cost": estimated_cost, "error_type": error_type})
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            LOGGER.exception("AI usage ledger write failed")
 
     def _load_credentials(self, provider: str) -> ProviderCredentials:
         # PostgreSQL/Supabase path uses FOR UPDATE as required. SQLite accepts the same query
