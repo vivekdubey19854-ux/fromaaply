@@ -10,4 +10,4 @@ def test_alembic_has_one_head_after_phase5a_merge():
     config.set_main_option("script_location", str(backend / "migrations"))
     heads = ScriptDirectory.from_config(config).get_heads()
     assert len(heads) == 1
-    assert heads[0] == "0016_unified_provider_control_plane"
+    assert heads[0] == "0017_real_authentication"

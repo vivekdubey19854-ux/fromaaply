@@ -20,9 +20,20 @@ const ALLOWED = ['application/pdf','image/jpeg','image/png','image/webp'];
 const isAdminSurface = new URLSearchParams(window.location.search).get('admin') === '1';
 let accessToken = localStorage.getItem('formwise_access_token') || '';
 let tokenPromise = null;
-
+async function refreshSession() {
+  const refreshToken = localStorage.getItem('formwise_refresh_token');
+  if (!refreshToken) return false;
+  const response = await fetch(API + '/v1/auth/refresh', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({refresh_token:refreshToken}) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) return false;
+  accessToken = data.access_token; localStorage.setItem('formwise_access_token', accessToken);
+  if (data.refresh_token) localStorage.setItem('formwise_refresh_token', data.refresh_token);
+  if (data.user_id) localStorage.setItem(uidKey, data.user_id);
+  return true;
+}
 async function ensureAccessToken() {
   if (accessToken) return accessToken;
+  if (await refreshSession()) return accessToken;
   if (!isLocalApi) throw new Error('Authentication required. Sign in to continue.');
   if (!tokenPromise) {
     tokenPromise = fetch(API + '/v1/auth/dev-token', {
@@ -41,57 +52,46 @@ async function ensureAccessToken() {
 }
 
 async function api(path, opts = {}) {
-  const token = await ensureAccessToken();
-  const headers = { Authorization: `Bearer ${token}`, ...(opts.headers || {}) };
+  let token = await ensureAccessToken();
+  let headers = { Authorization: `Bearer ${token}`, ...(opts.headers || {}) };
   if (opts.body && !(opts.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const response = await fetch(API + path, { ...opts, headers });
+  let response = await fetch(API + path, { ...opts, headers });
   let data = {}; try { data = await response.json(); } catch {}
-  if (response.status === 401) { localStorage.removeItem('formwise_access_token'); accessToken = ''; }
+  if (response.status === 401 && await refreshSession()) {
+    token = accessToken; headers = { Authorization: `Bearer ${token}`, ...(opts.headers || {}) }; response = await fetch(API + path, { ...opts, headers }); data = await response.json().catch(() => ({}));
+  }
+  if (response.status === 401) { localStorage.removeItem('formwise_access_token'); localStorage.removeItem('formwise_refresh_token'); accessToken = ''; }
   if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
   return data;
 }
 
 function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const submit = async event => {
-    event.preventDefault(); setError(''); setBusy(true);
-    try {
-      if (mode === 'reset') {
-        const response = await fetch(`${API}/v1/auth/password-reset/request`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || 'Password reset request failed.');
-        setError(data.email_delivery_configured ? 'Reset email sent. Check your inbox.' : 'Reset request accepted. Configure the email provider to receive the link.');
-        return;
-      }
-      const response = await fetch(`${API}/v1/auth/${mode === 'signup' ? 'signup' : 'login'}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mode === 'signup' ? { email, password, full_name: fullName || null } : { email, password }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || 'Authentication failed.');
-      accessToken = data.access_token;
-      localStorage.setItem('formwise_access_token', accessToken);
-      if (data.user_id) localStorage.setItem(uidKey, data.user_id);
-      if (data.refresh_token) localStorage.setItem('formwise_refresh_token', data.refresh_token);
-      onAuthenticated();
-    } catch (err) { setError(err instanceof Error ? err.message : 'Authentication failed.'); }
-    finally { setBusy(false); }
-  };
-  return <main className="fw-auth-page"><form className="fw-auth-card" onSubmit={submit}>
-    <div className="fw-kicker">FORMWISE // SECURE ACCOUNT</div><h1>{mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : 'Welcome back'}</h1>
-    <p>Save verified profile data securely and prepare forms with human approval at sensitive steps.</p>
-    {mode === 'signup' && <input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Full name" maxLength={200} />}
-    <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" autoComplete="email" />
-    {mode !== 'reset' && <input type="password" required minLength={12} value={password} onChange={e => setPassword(e.target.value)} placeholder="Password (12+ characters)" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />}
-    {error && <div className="fw-inline-status">{error}</div>}
-    <button className="fw-neon-btn" disabled={busy}>{busy ? 'PROCESSING…' : mode === 'signup' ? 'CREATE ACCOUNT' : mode === 'reset' ? 'SEND RESET LINK' : 'SIGN IN'}</button>
-    {mode === 'login' && <button type="button" className="fw-link-btn" onClick={() => { setMode('reset'); setError(''); }}>Forgot password?</button>}
-    <button type="button" className="fw-link-btn" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); }}>{mode === 'signup' ? 'Already have an account? Sign in' : 'Create a new account'}</button>
+  const [mode, setMode] = useState('login'); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState(''); const [challengeId, setChallengeId] = useState(''); const [otp, setOtp] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [providers, setProviders] = useState([]);
+  const finish = data => { accessToken = data.access_token; localStorage.setItem('formwise_access_token', accessToken); if (data.user_id) localStorage.setItem(uidKey, data.user_id); if (data.refresh_token) localStorage.setItem('formwise_refresh_token', data.refresh_token); onAuthenticated(); };
+  useEffect(() => {
+    fetch(`${API}/v1/auth/providers`).then(r=>r.ok?r.json():{providers:[]}).then(d=>setProviders((d.providers||[]).filter(p=>p.configured && (p.methods||[]).includes('oauth')))).catch(()=>{});
+    const code = new URLSearchParams(window.location.search).get('auth_code'); if (!code) return; setBusy(true);
+    fetch(`${API}/v1/auth/oauth/exchange`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code}) }).then(async r => { const data=await r.json().catch(()=>({})); if(!r.ok) throw new Error(data.detail || 'OAuth sign-in failed.'); window.history.replaceState({}, document.title, window.location.pathname); finish(data); }).catch(e=>setError(e.message)).finally(()=>setBusy(false));
+  }, []);
+  const submit = async event => { event.preventDefault(); setError(''); setBusy(true); try {
+    if (mode === 'google') { window.location.href = `${API}/v1/auth/oauth/google/start`; return; }
+    if (mode === 'phone') { const r=await fetch(`${API}/v1/auth/otp/request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})}); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.detail || 'OTP request failed.'); setChallengeId(d.challenge_id); setMode('verify-phone'); return; }
+    if (mode === 'verify-phone') { const r=await fetch(`${API}/v1/auth/otp/verify`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challenge_id:challengeId,code:otp})}); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.detail || 'OTP verification failed.'); finish(d); return; }
+    if (mode === 'reset') { const r=await fetch(`${API}/v1/auth/password-reset/request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})}); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.detail || 'Password reset request failed.'); setError(d.email_delivery_configured ? 'Reset email sent.' : 'Reset accepted; email provider is not configured.'); return; }
+    const r=await fetch(`${API}/v1/auth/${mode === 'signup' ? 'signup' : 'login'}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(mode === 'signup' ? {email,password,full_name:fullName || null} : {email,password})}); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.detail || 'Authentication failed.'); finish(d);
+  } catch (e) { setError(e instanceof Error ? e.message : 'Authentication failed.'); } finally { setBusy(false); } };
+  const heading = mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : mode === 'phone' || mode === 'verify-phone' ? 'Phone verification' : 'Welcome back';
+  return <main className="fw-auth-page"><form className="fw-auth-card" onSubmit={submit}><div className="fw-kicker">FORMWISE // SECURE ACCOUNT</div><h1>{heading}</h1><p>Use a verified identity. OTP is sent and checked by the configured provider; Formwise never bypasses CAPTCHA or OTP.</p>
+    {(mode === 'login' || mode === 'signup' || mode === 'reset') && <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address" autoComplete="email" />}
+    {mode === 'signup' && <input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Full name" maxLength={200} />}
+    {(mode === 'login' || mode === 'signup') && <input type="password" required minLength={12} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password (12+ characters)" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} />}
+    {mode === 'phone' && <input required value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Phone, e.g. +919876543210" autoComplete="tel" />}
+    {mode === 'verify-phone' && <input required inputMode="numeric" value={otp} onChange={e=>setOtp(e.target.value)} placeholder="Enter the OTP you received" autoComplete="one-time-code" />}
+    {error && <div className="fw-inline-status">{error}</div>}<button className="fw-neon-btn" disabled={busy}>{busy ? 'PROCESSING…' : mode === 'signup' ? 'CREATE ACCOUNT' : mode === 'reset' ? 'SEND RESET LINK' : mode === 'phone' ? 'SEND OTP' : mode === 'verify-phone' ? 'VERIFY OTP' : 'SIGN IN'}</button>
+    {mode === 'login' && <><button type="button" className="fw-link-btn" onClick={()=>{setBusy(true);window.location.href=`${API}/v1/auth/oauth/google/start`;}}>CONTINUE WITH GOOGLE</button>{providers.filter(p=>p.provider !== 'google').map(p=><button key={p.provider} type="button" className="fw-link-btn" onClick={()=>{setBusy(true);window.location.href=`${API}/v1/auth/oauth/${p.provider}/start`;}}>CONTINUE WITH {String(p.display_name||p.provider).toUpperCase()}</button>)}<button type="button" className="fw-link-btn" onClick={()=>setMode('phone')}>SIGN IN WITH PHONE OTP</button><button type="button" className="fw-link-btn" onClick={()=>{setMode('reset');setError('');}}>Forgot password?</button></>}
+    {mode === 'verify-phone' && <button type="button" className="fw-link-btn" onClick={()=>{setMode('phone');setError('');}}>Request a new OTP</button>}
+    {mode === 'login' || mode === 'reset' ? <button type="button" className="fw-link-btn" onClick={()=>{setMode('signup');setError('');}}>Create a new account</button> : <button type="button" className="fw-link-btn" onClick={()=>{setMode('login');setError('');}}>Back to email login</button>}
   </form></main>;
 }
 

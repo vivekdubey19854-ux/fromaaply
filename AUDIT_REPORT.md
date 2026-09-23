@@ -93,3 +93,12 @@ The final expansion adds an extensible provider control plane. The runtime catal
 Storage configuration now has a private encrypted registry for Oracle Object Storage, Cloudflare R2, Backblaze B2, Firebase Storage and Supabase Storage, with capacity/quota fields and generic S3-compatible failover integration. Authentication configuration now has Firebase, Supabase, Clerk, Stytch and Descope registries plus separate canonical identity mappings and a public enabled-methods capability endpoint.
 
 Admin APIs expose masked live provider, storage and authentication state, encrypted credential rotation, model discovery, connection testing and priority/fallback configuration. No credential is returned in an API response. Deterministic tests cover the 20+ catalog, generic provider dispatch, secret-safety contract and existing storage failover.
+
+
+## Real multi-provider authentication — 2026-09-23
+
+The authentication layer now supports durable email/password sessions, refresh rotation, revocation and logout; Google OAuth authorization-code flow with one-time state, nonce and short-lived handoff exchange; provider-issued token verification for Firebase, Supabase Auth, Clerk, Stytch and Descope; phone OTP request/verification through configured provider adapters; canonical Formwise identity resolution; and secure account linking that rejects identities already owned by another account or unverified email collisions.
+
+Provider routing falls back only on provider outage or timeout. Invalid passwords, OTP codes, OAuth codes and external identity tokens fail immediately without trying another provider. Admin APIs manage provider credentials, OAuth/JWKS/OTP endpoints, enablement, priority, fallback methods and configuration while returning masked metadata only. Production dev-token issuance remains disabled.
+
+The repository implementation is credential-ready. Real Google, Firebase, Supabase, Clerk, Stytch, Descope and SMS-provider credentials plus redirect URLs must still be configured in staging before external end-to-end smoke testing.

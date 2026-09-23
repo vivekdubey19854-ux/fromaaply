@@ -599,21 +599,43 @@ def update_storage_provider(provider: str, body: StorageProviderRequest, db: Ses
 
 @router.get("/auth/providers")
 def list_auth_providers(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
-    rows = db.execute(text("SELECT provider,display_name,priority,enabled,methods_json,health,last_test_at FROM auth_provider_registry ORDER BY priority,provider")).mappings().all()
-    return [dict(row) | {"methods": json.loads(row["methods_json"] or "[]")} for row in rows]
+    rows = db.execute(text("SELECT provider,display_name,priority,enabled,methods_json,health,last_test_at,client_id,issuer,jwks_url,authorize_url,token_url,userinfo_url,otp_request_url,otp_verify_url,credentials_encrypted FROM auth_provider_registry ORDER BY priority,provider")).mappings().all()
+    return [dict(row) | {"methods": json.loads(row["methods_json"] or "[]"), "configured": bool(row["credentials_encrypted"]), "credentials_encrypted": None} for row in rows]
 
 
 class AuthProviderRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=160)
     priority: int = Field(default=100, ge=1)
     enabled: bool = True
     methods: list[str] = Field(default_factory=lambda: ["password"])
+    client_id: str | None = Field(default=None, max_length=255)
+    issuer: str | None = Field(default=None, max_length=500)
+    jwks_url: str | None = Field(default=None, max_length=500)
+    authorize_url: str | None = Field(default=None, max_length=500)
+    token_url: str | None = Field(default=None, max_length=500)
+    userinfo_url: str | None = Field(default=None, max_length=500)
+    otp_request_url: str | None = Field(default=None, max_length=500)
+    otp_verify_url: str | None = Field(default=None, max_length=500)
 
 
 @router.put("/auth/providers/{provider}")
 def update_auth_provider(provider: str, body: AuthProviderRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
-    db.execute(text("UPDATE auth_provider_registry SET priority=:priority,enabled=:enabled,methods_json=:methods,updated_at=now() WHERE provider=:provider"), {"provider": provider.strip().lower(), "priority": body.priority, "enabled": body.enabled, "methods": json.dumps(body.methods)})
+    db.execute(text("""INSERT INTO auth_provider_registry(provider,display_name,priority,enabled,methods_json,client_id,issuer,jwks_url,authorize_url,token_url,userinfo_url,otp_request_url,otp_verify_url,updated_at) VALUES (:provider,COALESCE(:display_name,:provider),:priority,:enabled,:methods,:client_id,:issuer,:jwks_url,:authorize_url,:token_url,:userinfo_url,:otp_request_url,:otp_verify_url,now()) ON CONFLICT(provider) DO UPDATE SET display_name=COALESCE(:display_name,auth_provider_registry.display_name),priority=:priority,enabled=:enabled,methods_json=:methods,client_id=:client_id,issuer=:issuer,jwks_url=:jwks_url,authorize_url=:authorize_url,token_url=:token_url,userinfo_url=:userinfo_url,otp_request_url=:otp_request_url,otp_verify_url=:otp_verify_url,updated_at=now()"""), {"provider": provider.strip().lower(), "display_name": body.display_name, "priority": body.priority, "enabled": body.enabled, "methods": json.dumps(body.methods), "client_id": body.client_id, "issuer": body.issuer, "jwks_url": body.jwks_url, "authorize_url": body.authorize_url, "token_url": body.token_url, "userinfo_url": body.userinfo_url, "otp_request_url": body.otp_request_url, "otp_verify_url": body.otp_verify_url})
     db.commit()
     return {"provider": provider.strip().lower(), "status": "updated", **body.model_dump()}
+
+
+class AuthProviderCredentialRequest(BaseModel):
+    credential: dict[str, Any] = Field(min_length=1)
+
+
+@router.put("/auth/providers/{provider}/credential")
+def rotate_auth_provider_credential(provider: str, body: AuthProviderCredentialRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    ciphertext = encrypt_admin_api_key(json.dumps(body.credential, separators=(",", ":")))
+    db.execute(text("UPDATE auth_provider_registry SET credentials_encrypted=:secret,updated_at=now() WHERE provider=:provider"), {"provider": provider, "secret": ciphertext})
+    db.commit()
+    return {"provider": provider, "configured": True, "secret": "masked"}
 
 
 class StorageCredentialRequest(BaseModel):
