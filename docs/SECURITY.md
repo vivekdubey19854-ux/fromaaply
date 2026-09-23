@@ -55,3 +55,10 @@ The system must provide task cancellation/kill-switch capability, revoke active 
 ## Production completion addendum
 
 Production requests receive correlation IDs and security headers. AI usage is recorded in a database ledger and guarded by daily token and cost limits. Registry entries are HTTPS allowlist records and newly created entries remain disabled until verification. Logs must exclude tokens, passwords, OTP values, CAPTCHA contents, API keys and private document data. Docker, PostgreSQL, Redis and staging credentials must be supplied through a secret manager rather than this repository.
+
+
+## Unified provider security
+
+AI, storage and authentication provider configuration is controlled through authenticated system-admin APIs. Provider credentials are encrypted before persistence and responses contain only masked/configured metadata. Model discovery and connection tests return capability and health metadata without returning secrets. The provider router treats external responses as untrusted and keeps deterministic policy above model output.
+
+External identity subjects are stored in `auth_identity_mappings` and never replace the canonical Formwise user ID. Authentication fallback is intended only for infrastructure availability; invalid credentials must not be blindly retried against another provider. Sensitive form controls, OTP, CAPTCHA, legal declarations, payment confirmation and final submission remain human-controlled.

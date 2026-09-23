@@ -118,3 +118,12 @@ Tasks must support safe pause, retry where appropriate, recovery, cancellation, 
 ## Production completion addendum
 
 PostgreSQL is the durable authority for task recovery, AI usage accounting, registry metadata and audit state. Redis carries queue messages but never replaces database state. The worker owns Playwright contexts and uses lease ownership for mutations. The production topology is API, worker/browser worker, PostgreSQL, Redis and a static frontend. Provider credentials are encrypted and injected through deployment secrets.
+
+
+## Unified provider federation
+
+The `ai_provider_registry` and `ai_model_registry` tables define provider capabilities, reasoning support, free-tier classification, priority and fallback order without requiring source changes for new OpenAI-compatible providers. The runtime catalog covers 24 providers and OmniRoute. Smart routing considers task type, capability, free-tier classification, quota, RPM, cooldown, health and priority before bounded fallback. OmniRoute is optional and never a single point of failure.
+
+`storage_provider_registry` provides an encrypted, private provider registry for Oracle, Cloudflare R2, Backblaze B2, Firebase and Supabase. The storage adapter keeps primary-plus-failover semantics and does not replicate objects without an explicit policy. `auth_provider_registry` and `auth_identity_mappings` separate external authentication subjects from the canonical Formwise user identity.
+
+The Admin control plane is the server-authoritative configuration boundary for these registries. It exposes masked metadata only, writes credentials through encrypted storage, and requires system-admin authorization for every mutation.

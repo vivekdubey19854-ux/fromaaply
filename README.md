@@ -47,3 +47,14 @@ The backend supports an optional Serper provider (`FORMWISE_SERPER_API_KEY`) and
 Backend tests run through GitHub Actions. Frontend build verification runs through a separate GitHub Actions workflow.
 
 Production authentication requires a verified JWT; the legacy `X-User-ID` development header must be disabled in production.
+
+
+## Unified provider control plane
+
+Formwise now includes a database-backed control plane for **24 AI providers plus OmniRoute**, with extensible OpenAI-compatible adapters, capability metadata, reasoning flags, model discovery, free-tier classification, quota/rate/cooldown policy, health tracking and bounded failover. OmniRoute is treated as an optional federation gateway rather than a required dependency; direct providers remain available when it is unavailable.
+
+The control plane also supports private storage provider records for Oracle Object Storage, Cloudflare R2, Backblaze B2, Firebase Storage and Supabase Storage. S3-compatible credentials are encrypted at rest, storage remains private by default, and uploads/downloads use primary-plus-failover routing with signed URLs.
+
+Authentication configuration includes Firebase, Supabase, Clerk, Stytch and Descope provider records. The public authentication capability endpoint exposes only enabled login methods; provider secrets never leave the server. The canonical Formwise user remains the application identity, while external identity mappings are stored separately.
+
+System-admin APIs under `/v1/admin` manage AI provider policy and credentials, model discovery, storage capacity and credentials, authentication provider methods, provider tests, health, priority and fallback order. All configuration changes require server-side admin authorization and secrets are masked in responses.

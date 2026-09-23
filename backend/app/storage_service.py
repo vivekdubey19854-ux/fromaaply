@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -117,6 +118,24 @@ class StorageServiceAdapter:
                 priority = int(row.priority)
                 status = str(row.status)
             nodes.append(StorageNode(node_id, provider, bucket_name, priority, status, credentials))
+        if nodes or getattr(dialect, "name", "") != "postgresql":
+            return nodes
+        # The unified registry is the source for newly configured providers. Credentials
+        # remain encrypted at rest and are decrypted only while constructing a client.
+        try:
+            registry_rows = self.db.execute(text("SELECT provider,endpoint,bucket,region,credentials_encrypted,priority,health,enabled FROM storage_provider_registry WHERE enabled=true AND health IN ('healthy','unknown') ORDER BY priority,provider")).mappings().all()
+            from .credential_crypto import decrypt_admin_api_key
+            for row in registry_rows:
+                if not row.get("credentials_encrypted"):
+                    continue
+                try:
+                    credentials = json.loads(decrypt_admin_api_key(row["credentials_encrypted"]))
+                except Exception:
+                    continue
+                credentials.update({"endpoint_url": row["endpoint"], "bucket_name": row["bucket"], "region_name": row["region"]})
+                nodes.append(StorageNode(str(row["provider"]), str(row["provider"]), str(row["bucket"] or credentials.get("bucket_name") or ""), int(row["priority"]), "UP", credentials))
+        except Exception:
+            self.db.rollback()
         return nodes
 
     def _client(self, node: StorageNode) -> Any:

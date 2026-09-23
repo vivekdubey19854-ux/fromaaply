@@ -217,3 +217,19 @@ def confirm_password_reset(payload: PasswordResetRequest, db: Session = Depends(
     token.used_at = datetime.utcnow()
     db.commit()
     return {"status": "password_updated"}
+
+
+@router.get("/providers")
+def configured_auth_providers(db: Session = Depends(get_db)) -> dict[str, object]:
+    """Expose only enabled login methods; provider credentials never leave the server."""
+    try:
+        rows = db.execute(__import__("sqlalchemy").text("SELECT provider,display_name,methods_json,health FROM auth_provider_registry WHERE enabled=true ORDER BY priority,provider")).mappings().all()
+    except Exception:
+        rows = []
+    methods: set[str] = {"password"}
+    providers: list[dict[str, object]] = []
+    for row in rows:
+        configured = __import__("json").loads(row["methods_json"] or "[]")
+        methods.update(configured)
+        providers.append({"provider": row["provider"], "display_name": row["display_name"], "methods": configured, "health": row["health"]})
+    return {"methods": sorted(methods), "providers": providers}

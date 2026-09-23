@@ -18,6 +18,7 @@ from .credential_crypto import encrypt_admin_api_key
 from .database import get_db
 from .payment_service import PaymentService
 from .website_health_service import WebsiteHealthService
+from .ai_provider_adapter import PROVIDER_CATALOG
 
 router = APIRouter(prefix="/v1/admin", tags=["super-admin"])
 
@@ -529,3 +530,128 @@ def create_website(payload: WebsiteRegistryRequest, db: Session = Depends(get_db
     db.commit()
     db.refresh(row)
     return {"website_id": row.website_id, "name": row.name, "category": row.category, "base_url": row.base_url, "allowed_domains": domains, "enabled": row.enabled, "verified": row.verified, "config": payload.config}
+
+
+class ProviderConfigRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=160)
+    endpoint: str | None = Field(default=None, max_length=500)
+    capabilities: list[str] = Field(default_factory=lambda: ["general"])
+    reasoning: bool = False
+    free_tier: bool = False
+    enabled: bool = True
+    priority: int = Field(default=100, ge=1, le=10000)
+    fallback_order: int = Field(default=100, ge=1, le=10000)
+
+
+@router.get("/providers")
+def list_ai_providers(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
+    rows = db.execute(text("SELECT r.provider,r.display_name,r.adapter_type,r.capabilities_json,r.reasoning,r.free_tier,r.enabled,r.priority,r.fallback_order,r.endpoint,r.last_error,r.last_success_at,r.last_test_at,h.status,h.error_rate FROM ai_provider_registry r LEFT JOIN ai_provider_health h USING(provider) ORDER BY r.priority,r.fallback_order,r.provider")).mappings().all()
+    known = {str(row["provider"]) for row in rows}
+    result = [dict(row) | {"capabilities": json.loads(row["capabilities_json"] or "[]"), "configured": bool(db.execute(text("SELECT 1 FROM admin_api_keys WHERE provider_name=:provider AND is_active=true"), {"provider": row["provider"]}).scalar())} for row in rows]
+    result.extend({**item, "capabilities": ["general"], "enabled": False, "configured": False, "status": "unconfigured", "priority": 100, "fallback_order": 100} for item in PROVIDER_CATALOG if item["provider"] not in known)
+    return result
+
+
+@router.put("/providers/{provider}")
+def update_ai_provider(provider: str, body: ProviderConfigRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    db.execute(text("""INSERT INTO ai_provider_registry(provider,display_name,adapter_type,capabilities_json,reasoning,free_tier,enabled,priority,fallback_order,endpoint,updated_at) VALUES (:provider,:name,'openai_compatible',:capabilities,:reasoning,:free,:enabled,:priority,:fallback,:endpoint,now()) ON CONFLICT(provider) DO UPDATE SET display_name=COALESCE(:name,ai_provider_registry.display_name),capabilities_json=:capabilities,reasoning=:reasoning,free_tier=:free,enabled=:enabled,priority=:priority,fallback_order=:fallback,endpoint=:endpoint,updated_at=now()"""), {"provider": provider, "name": body.display_name or provider, "capabilities": json.dumps(body.capabilities), "reasoning": body.reasoning, "free": body.free_tier, "enabled": body.enabled, "priority": body.priority, "fallback": body.fallback_order, "endpoint": body.endpoint})
+    db.commit()
+    return {"provider": provider, "status": "updated", **body.model_dump()}
+
+
+class ProviderCredentialRequest(BaseModel):
+    credential: dict[str, Any] = Field(min_length=1)
+
+
+@router.put("/providers/{provider}/credential")
+def rotate_provider_credential(provider: str, body: ProviderCredentialRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    ciphertext = encrypt_admin_api_key(json.dumps(body.credential, separators=(",", ":")))
+    db.execute(text("INSERT INTO admin_api_keys(provider_name,api_key_encrypted,is_active,updated_at) VALUES (:provider,:secret,true,now()) ON CONFLICT(provider_name) DO UPDATE SET api_key_encrypted=:secret,is_active=true,updated_at=now()"), {"provider": provider, "secret": ciphertext})
+    db.commit()
+    return {"provider": provider, "configured": True, "secret": "masked"}
+
+
+@router.get("/storage/providers")
+def list_storage_providers(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
+    rows = db.execute(text("SELECT provider,display_name,adapter_type,endpoint,bucket,region,capacity_bytes,free_quota_bytes,usage_bytes,priority,enabled,health,last_test_at FROM storage_provider_registry ORDER BY priority,provider")).mappings().all()
+    return [dict(row) for row in rows]
+
+
+class StorageProviderRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=160)
+    endpoint: str | None = None
+    bucket: str | None = None
+    region: str | None = None
+    capacity_bytes: int | None = Field(default=None, ge=0)
+    free_quota_bytes: int | None = Field(default=None, ge=0)
+    priority: int = Field(default=100, ge=1)
+    enabled: bool = True
+
+
+@router.put("/storage/providers/{provider}")
+def update_storage_provider(provider: str, body: StorageProviderRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    db.execute(text("""INSERT INTO storage_provider_registry(provider,display_name,endpoint,bucket,region,capacity_bytes,free_quota_bytes,priority,enabled,updated_at) VALUES (:provider,:name,:endpoint,:bucket,:region,:capacity,:free,:priority,:enabled,now()) ON CONFLICT(provider) DO UPDATE SET display_name=:name,endpoint=:endpoint,bucket=:bucket,region=:region,capacity_bytes=:capacity,free_quota_bytes=:free,priority=:priority,enabled=:enabled,updated_at=now()"""), {"provider": provider.strip().lower(), "name": body.display_name, "endpoint": body.endpoint, "bucket": body.bucket, "region": body.region, "capacity": body.capacity_bytes, "free": body.free_quota_bytes, "priority": body.priority, "enabled": body.enabled})
+    db.commit()
+    return {"provider": provider.strip().lower(), "status": "updated", **body.model_dump()}
+
+
+@router.get("/auth/providers")
+def list_auth_providers(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
+    rows = db.execute(text("SELECT provider,display_name,priority,enabled,methods_json,health,last_test_at FROM auth_provider_registry ORDER BY priority,provider")).mappings().all()
+    return [dict(row) | {"methods": json.loads(row["methods_json"] or "[]")} for row in rows]
+
+
+class AuthProviderRequest(BaseModel):
+    priority: int = Field(default=100, ge=1)
+    enabled: bool = True
+    methods: list[str] = Field(default_factory=lambda: ["password"])
+
+
+@router.put("/auth/providers/{provider}")
+def update_auth_provider(provider: str, body: AuthProviderRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    db.execute(text("UPDATE auth_provider_registry SET priority=:priority,enabled=:enabled,methods_json=:methods,updated_at=now() WHERE provider=:provider"), {"provider": provider.strip().lower(), "priority": body.priority, "enabled": body.enabled, "methods": json.dumps(body.methods)})
+    db.commit()
+    return {"provider": provider.strip().lower(), "status": "updated", **body.model_dump()}
+
+
+class StorageCredentialRequest(BaseModel):
+    credential: dict[str, Any] = Field(min_length=1)
+
+
+@router.put("/storage/providers/{provider}/credential")
+def rotate_storage_credential(provider: str, body: StorageCredentialRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    ciphertext = encrypt_admin_api_key(json.dumps(body.credential, separators=(",", ":")))
+    db.execute(text("UPDATE storage_provider_registry SET credentials_encrypted=:secret,updated_at=now() WHERE provider=:provider"), {"provider": provider, "secret": ciphertext})
+    db.commit()
+    return {"provider": provider, "configured": True, "secret": "masked"}
+
+
+@router.post("/providers/{provider}/test")
+def test_provider_connection(provider: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    """Return connection metadata only; credentials and provider responses are never exposed."""
+    provider = provider.strip().lower()
+    try:
+        row = db.execute(text("SELECT provider,enabled,endpoint FROM ai_provider_registry WHERE provider=:provider"), {"provider": provider}).mappings().first()
+        key = db.execute(text("SELECT 1 FROM admin_api_keys WHERE provider_name=:provider AND is_active=true"), {"provider": provider}).scalar()
+        if not row or not row["enabled"] or not key:
+            return {"provider": provider, "configured": bool(key), "reachable": False, "authenticated": False, "health": "configuration_error"}
+        from .ai_provider_adapter import MultiAIProviderAdapter
+        started = __import__("time").monotonic()
+        models = MultiAIProviderAdapter(db, credential_decryptor=__import__("app.credential_crypto", fromlist=["decrypt_admin_api_key"]).decrypt_admin_api_key).discover_models(provider)
+        return {"provider": provider, "configured": True, "reachable": True, "authenticated": True, "capabilities": models[0].get("capabilities", []) if models else [], "model_count": len(models), "latency_ms": int((__import__("time").monotonic() - started) * 1000), "health": "healthy"}
+    except Exception:
+        db.rollback()
+        return {"provider": provider, "configured": False, "reachable": False, "authenticated": False, "health": "unavailable"}
+
+
+@router.post("/providers/{provider}/models/discover")
+def discover_provider_models(provider: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    from .ai_provider_adapter import MultiAIProviderAdapter
+    try:
+        models = MultiAIProviderAdapter(db, credential_decryptor=__import__("app.credential_crypto", fromlist=["decrypt_admin_api_key"]).decrypt_admin_api_key).discover_models(provider)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="provider model discovery failed") from exc
+    return {"provider": provider.strip().lower(), "models": models, "count": len(models)}

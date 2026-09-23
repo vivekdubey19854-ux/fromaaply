@@ -42,13 +42,48 @@ PROVIDER_ALIASES = {
     "aiml": "aimlapi",
     "novita_ai": "novita",
     "base64": "base64_ai",
+    "grok": "xai",
+    "xai_grok": "xai",
+    "qwen_alibaba": "qwen",
+    "glm": "zai",
+    "zhipu": "zai",
+    "kimi": "moonshot",
+    "alibaba": "qwen",
 }
+
+PROVIDER_CATALOG: tuple[dict[str, Any], ...] = (
+    {"provider": "gemini", "name": "Google Gemini / AI Studio", "adapter": "direct", "free_tier": True},
+    {"provider": "groq", "name": "Groq", "adapter": "direct", "free_tier": True},
+    {"provider": "openai", "name": "OpenAI", "adapter": "direct", "free_tier": False},
+    {"provider": "anthropic", "name": "Anthropic", "adapter": "direct", "free_tier": False},
+    {"provider": "deepseek", "name": "DeepSeek", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "xai", "name": "xAI / Grok", "adapter": "openai_compatible", "free_tier": False},
+    {"provider": "openrouter", "name": "OpenRouter", "adapter": "gateway", "free_tier": True},
+    {"provider": "huggingface", "name": "Hugging Face", "adapter": "direct", "free_tier": True},
+    {"provider": "mistral", "name": "Mistral", "adapter": "direct", "free_tier": True},
+    {"provider": "cerebras", "name": "Cerebras", "adapter": "direct", "free_tier": True},
+    {"provider": "nvidia_nim", "name": "NVIDIA NIM", "adapter": "openai_compatible", "free_tier": False},
+    {"provider": "together", "name": "Together AI", "adapter": "direct", "free_tier": False},
+    {"provider": "fireworks_ai", "name": "Fireworks AI", "adapter": "direct", "free_tier": False},
+    {"provider": "cohere", "name": "Cohere", "adapter": "direct", "free_tier": True},
+    {"provider": "perplexity", "name": "Perplexity", "adapter": "openai_compatible", "free_tier": False},
+    {"provider": "qwen", "name": "Qwen / Alibaba", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "deepinfra", "name": "DeepInfra", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "novita", "name": "Novita AI", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "siliconflow", "name": "SiliconFlow", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "hyperbolic", "name": "Hyperbolic", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "zai", "name": "Z.ai / GLM", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "moonshot", "name": "Moonshot / Kimi", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "minimax", "name": "MiniMax", "adapter": "openai_compatible", "free_tier": False},
+    {"provider": "sambanova", "name": "SambaNova", "adapter": "openai_compatible", "free_tier": True},
+    {"provider": "omniroute", "name": "OmniRoute Gateway", "adapter": "gateway", "free_tier": True},
+)
 
 DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
     "vision_form_reading": ("gemini", "groq", "anthropic", "openrouter"),
     "document_processing": ("base64_ai", "azure_document_intelligence", "aws_bedrock", "gemini"),
     "semantic_analysis": ("anthropic", "openai", "gemini", "mistral", "cohere"),
-    "general": ("openai", "anthropic", "gemini", "groq", "openrouter"),
+    "general": ("gemini", "groq", "deepseek", "openrouter", "openai", "anthropic"),
 }
 
 
@@ -122,7 +157,7 @@ class MultiAIProviderAdapter:
         self._lock = threading.RLock()
 
     def execute(self, request: AIRequest) -> AIProviderResult:
-        providers = tuple(request.provider_route or self.routes.get(request.task, self.routes["general"]))
+        providers = tuple(request.provider_route or self.smart_route(request))
         if not providers:
             raise ValueError("at least one provider is required")
 
@@ -171,6 +206,43 @@ class MultiAIProviderAdapter:
 
         summary = ", ".join(f"{provider}:{type(exc).__name__}" for provider, exc in failures) or "no provider attempted"
         raise AIProviderExhausted(f"AI failover exhausted within budget: {summary}")
+
+    def smart_route(self, request: AIRequest) -> tuple[str, ...]:
+        """Build a capability-aware free-first route from the durable registry."""
+        capability = str(request.metadata.get("capability") or ("vision" if request.task == "vision_form_reading" else "document" if request.task == "document_processing" else "general"))
+        fallback = tuple(self.routes.get(request.task, self.routes["general"]))
+        try:
+            rows = self.db.execute(text("SELECT provider,capabilities_json,reasoning,free_tier,priority,fallback_order FROM ai_provider_registry WHERE enabled=true ORDER BY priority,fallback_order,provider")).mappings().all()
+            eligible = []
+            for row in rows:
+                capabilities = json.loads(row["capabilities_json"] or "[]")
+                if capability not in capabilities and "general" not in capabilities:
+                    continue
+                if request.metadata.get("reasoning") and not row["reasoning"]:
+                    continue
+                eligible.append((0 if row["free_tier"] else 1, int(row["priority"]), int(row["fallback_order"]), str(row["provider"])))
+            return tuple(item[3] for item in sorted(eligible)) or fallback
+        except Exception:
+            LOGGER.debug("provider registry routing unavailable; using static route", exc_info=True)
+            return fallback
+
+    def discover_models(self, provider: str, *, timeout_seconds: float = 5.0) -> list[dict[str, Any]]:
+        """Discover models where the provider exposes an OpenAI-compatible models endpoint."""
+        canonical = self._canonical_provider(provider)
+        credentials = self._load_credentials(canonical)
+        config = self._mapping(credentials.payload)
+        endpoint = str(config.get("base_url", "")).rstrip("/")
+        if not endpoint:
+            raise AIProviderUnavailable(f"model discovery endpoint is not configured for {canonical}")
+        api_key = str(config.get("api_key", credentials.payload if isinstance(credentials.payload, str) else ""))
+        try:
+            response = self._http_client_factory(timeout=timeout_seconds).get(f"{endpoint}/models", headers={"Authorization": f"Bearer {api_key}"})
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            raise AIProviderUnavailable(f"model discovery failed for {canonical}") from exc
+        models = payload.get("data", []) if isinstance(payload, Mapping) else []
+        return [{"id": str(item.get("id")), "provider": canonical, "capabilities": ["general"], "reasoning": any(token in str(item.get("id", "")).lower() for token in ("reason", "thinking", "r1", "o1", "o3"))} for item in models if isinstance(item, Mapping) and item.get("id")]
 
     def _provider_allowed(self, provider: str, request: AIRequest) -> bool:
         """Apply administrator policy and database-backed rate/cooldown limits."""
@@ -297,6 +369,8 @@ class MultiAIProviderAdapter:
                 "mistral": self._mistral,
                 "base64_ai": self._base64_ai,
             }
+            if provider in {"xai", "qwen", "deepinfra", "novita", "siliconflow", "hyperbolic", "zai", "moonshot", "minimax", "sambanova", "omniroute"}:
+                return self._openai_compatible(request, credentials, timeout, provider=provider)
             handler = handlers.get(provider)
             if handler is None:
                 return self._openai_compatible(request, credentials, timeout, provider=provider)

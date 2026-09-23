@@ -97,3 +97,10 @@ No phase is considered complete until its acceptance criteria and tests pass. Th
 ## Release status — 2026-09-22
 
 The secure beta foundation and production-completion code pass are implemented and locally tested. AI usage ledger/quota, official registry metadata, admin operational APIs, deployment manifests, backup tooling and CI service definitions are complete in the repository. The staging release remains gated on real PostgreSQL, Redis, AI, S3-compatible storage, email and Razorpay credentials, followed by safe browser smoke tests that stop before final submit.
+
+
+## Unified platform expansion — implemented
+
+The provider control plane now includes 24 direct/gateway AI provider records plus OmniRoute, capability and reasoning metadata, model discovery for compatible endpoints, free-first route metadata, quotas, health and fallback. Storage and authentication registries cover the five requested provider families with encrypted credential fields, private storage failover and canonical identity mapping. Admin APIs expose masked live configuration, capacity/health metadata, credential rotation, model discovery and real connection testing.
+
+Remaining launch checks are external credential and infrastructure validation only; no provider secret is stored in this repository.

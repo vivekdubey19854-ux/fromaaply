@@ -84,3 +84,12 @@ Website registry health checks validate HTTPS, verified state and allowed offici
 Admin AI is now a deterministic server-side read-only operational assistant. It reads database-backed users, tasks, browser sessions, AI usage and failed-task counts. Mutations cannot be issued through the assistant query endpoint. High-risk actions require a preview and confirmation record tied to the authenticated admin, with expiry and audit logging.
 
 The final deterministic suite passes **145 backend tests**. Frontend tests and production build pass. Local PostgreSQL, Redis and Docker execution remain unavailable in the sandbox, so staging credentials and live provider verification remain external requirements.
+
+
+## Unified platform expansion — 2026-09-22
+
+The final expansion adds an extensible provider control plane. The runtime catalog contains 24 AI providers and OmniRoute, including direct SDK handlers and generic OpenAI-compatible providers. Capabilities, reasoning flags, free-tier classification, model discovery, priority, fallback order, quota, RPM, cooldown and health are represented in durable registries. OmniRoute is optional and direct-provider operation remains independent.
+
+Storage configuration now has a private encrypted registry for Oracle Object Storage, Cloudflare R2, Backblaze B2, Firebase Storage and Supabase Storage, with capacity/quota fields and generic S3-compatible failover integration. Authentication configuration now has Firebase, Supabase, Clerk, Stytch and Descope registries plus separate canonical identity mappings and a public enabled-methods capability endpoint.
+
+Admin APIs expose masked live provider, storage and authentication state, encrypted credential rotation, model discovery, connection testing and priority/fallback configuration. No credential is returned in an API response. Deterministic tests cover the 20+ catalog, generic provider dispatch, secret-safety contract and existing storage failover.

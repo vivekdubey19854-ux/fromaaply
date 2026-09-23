@@ -19,3 +19,10 @@ Object storage must use provider-side versioning and retention. Database backups
 ## External requirements
 
 Real PostgreSQL, Redis, object-storage, email, AI, and Razorpay credentials are required for infrastructure validation. The repository contains no credentials and the local sandbox did not have Docker, PostgreSQL, or Redis daemons available; therefore those checks are covered by CI configuration and must be executed in staging.
+
+
+## Provider control-plane configuration
+
+After applying migrations through `0016_unified_provider_control_plane`, system administrators configure AI, OmniRoute, storage and authentication providers through authenticated Admin APIs. The deployment environment must provide `FORMWISE_CREDENTIAL_ENCRYPTION_KEY`; provider secrets are submitted only over the protected Admin API and are encrypted before database storage. Do not place provider keys in Git, frontend bundles or ordinary environment templates.
+
+The first deployment should configure at least one direct AI provider and one private storage provider before enabling user workflows. OmniRoute is optional. Provider test and model-discovery endpoints report real reachability only after making the external request; unavailable credentials remain an explicit unavailable/configuration-error state.

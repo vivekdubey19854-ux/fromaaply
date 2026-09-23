@@ -7,6 +7,7 @@ type UserRow = { id: string; name: string; plan: string; credits: number; status
 type AdminSummary = { users:number; websites:number; enabled_websites:number; audit_events:number; tasks?:number; browser_sessions?:number; ai_usage?:number };
 type ProviderPolicy = { provider:string; priority:number; enabled:boolean; status?:string; error_rate?:string };
 type WebsiteHealth = { website_id:string; name:string; verified:boolean; enabled:boolean; health_status:string; version:string };
+type LiveProvider = { provider:string; display_name?:string; configured:boolean; enabled:boolean; status?:string; priority:number; fallback_order:number; capabilities?:string[] };
 
 const API = localStorage.getItem('formwise_api') || 'http://localhost:8000';
 const adminToken = () => localStorage.getItem('formwise_access_token') || localStorage.getItem('formwise_admin_token') || '';
@@ -89,6 +90,9 @@ export default function AdminDashboard() {
   const [aiUsage, setAiUsage] = useState<{total_tokens:number; total_cost:string}>({total_tokens:0, total_cost:'0'});
   const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy[]>([]);
   const [websites, setWebsites] = useState<WebsiteHealth[]>([]);
+  const [liveProviders, setLiveProviders] = useState<LiveProvider[]>([]);
+  const [storageProviders, setStorageProviders] = useState<Array<{provider:string;display_name:string;health:string;enabled:boolean}>>([]);
+  const [authProviders, setAuthProviders] = useState<Array<{provider:string;display_name:string;health:string;enabled:boolean}>>([]);
 
   useEffect(() => {
     localStorage.setItem('formwise_maintenance_mode', String(maintenance));
@@ -102,12 +106,19 @@ export default function AdminDashboard() {
       adminRequest<Array<{user_id:string; email:string; status:string; role:string}>>('/v1/admin/users'),
       adminRequest<ProviderPolicy[]>('/v1/admin/provider-policy'),
       adminRequest<WebsiteHealth[]>('/v1/admin/websites'),
-    ]).then(([liveSummary, liveUsage, liveUsers, livePolicy, liveWebsites]) => {
+      adminRequest<LiveProvider[]>('/v1/admin/providers'),
+      adminRequest<Array<{provider:string;display_name:string;health:string;enabled:boolean}>>('/v1/admin/storage/providers'),
+      adminRequest<Array<{provider:string;display_name:string;health:string;enabled:boolean}>>('/v1/admin/auth/providers'),
+    ]).then(([liveSummary, liveUsage, liveUsers, livePolicy, liveWebsites, liveAIProviders, liveStorageProviders, liveAuthProviders]) => {
       setSummary(liveSummary);
       setAiUsage({total_tokens: liveUsage.total_tokens, total_cost: liveUsage.total_cost});
       setUsers(liveUsers.map(user => ({id:user.user_id, name:user.email, plan:user.role, credits:0, status:user.status, spend:'—', lastJob:'—'})));
       setProviderPolicy(livePolicy);
       setWebsites(liveWebsites);
+      setLiveProviders(liveAIProviders);
+      setStorageProviders(liveStorageProviders);
+      setAuthProviders(liveAuthProviders);
+      setProviders(liveAIProviders.map(item => ({name:item.display_name || item.provider, short:item.provider.slice(0,2).toUpperCase(), tier:item.status || 'unconfigured', masked:item.configured ? '•••• configured' : '', latency:'—', configured:item.configured})));
       setStatus('LIVE DATABASE TELEMETRY CONNECTED');
     }).catch(error => setStatus(error instanceof Error ? error.message : 'Admin telemetry unavailable.'));
   }, []);
@@ -247,13 +258,14 @@ export default function AdminDashboard() {
       </section>}
 
       {tab === 'vault' && <section className="space-y-5">
-        <div className="fw-panel"><SectionHeader eyebrow="AI PROVIDER POLICY · LIVE DATABASE" title="Secure Vaults Gateway · HSM Key Enclaves" action={<div className="flex gap-2"><span className="fw-chip">{providerPolicy.length} POLICIES</span><button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: Provider policy is server-authoritative.')}>REFRESH POLICY</button></div>} />
+        <div className="fw-panel"><SectionHeader eyebrow="AI PROVIDER POLICY · LIVE DATABASE" title="Secure Vaults Gateway · HSM Key Enclaves" action={<div className="flex gap-2"><span className="fw-chip">{liveProviders.length} PROVIDERS · {providerPolicy.length} POLICIES</span><button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: Provider policy is server-authoritative.')}>REFRESH POLICY</button></div>} />
           {providerPolicy.length > 0 && <div className="fw-callout success">{providerPolicy.map(policy => `${policy.provider}: priority ${policy.priority} · ${policy.enabled ? 'enabled':'disabled'} · ${policy.status || 'health pending'}`).join(' | ')}</div>}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{providers.map(provider => <div key={provider.name} className="fw-vault-card"><div className="fw-provider-head"><span className="fw-provider-icon">{provider.short.slice(0,3)}</span><div><strong>{provider.name}</strong><span>{provider.tier}</span></div><span className={provider.configured ? 'fw-state':'fw-state fw-state-muted'}>{provider.configured?'CONFIGURED':'EMPTY'}</span></div><div className="fw-secret-row"><code>{provider.configured ? provider.masked : 'Enter provider API key…'}</code><button onClick={()=>{setSelectedProvider(provider);setKeyValue('')}}>{provider.configured?'ROTATE':'CONFIGURE'}</button></div><div className="fw-vault-foot"><span>Latency</span><b>{provider.latency}</b><span>{provider.configured?'AES-256 encrypted':'Awaiting secure input'}</span></div></div>)}</div>
         </div>
         <div className="grid gap-5 xl:grid-cols-[1.3fr_.9fr]">
           <div className="fw-panel"><SectionHeader eyebrow="5-ENCLAVE FAILOVER" title="Multi-Cloud S3 Storage Gateway" action={<span className="fw-chip">FAILOVER: ARMED</span>} /><div className="space-y-2">{STORAGE_NODES.map(node => <div className="fw-node-row" key={node.name}><div className="fw-priority">P{node.priority}</div><div className="min-w-0 flex-1"><strong>{node.name}</strong><span>{node.bucket}</span></div><span>{node.ping}</span><span className="fw-state">{node.status}</span></div>)}</div></div>
-          <div className="fw-panel"><SectionHeader eyebrow="AUTHENTICATION & IDENTITY GATEWAYS" title="4-Channel Auth Router" action={<span className="fw-chip">{authEnabled.filter(Boolean).length} OF 4 OPERATIONAL</span>} /><div className="space-y-3">{AUTH_GATEWAYS.map(([name,sub],i)=><div key={String(name)} className="fw-auth-row"><div><strong>{name}</strong><span>{sub}</span></div><Toggle checked={authEnabled[i]} onChange={value=>setAuthEnabled(items=>items.map((v,j)=>j===i?value:v))}/></div>)}</div></div>
+          <div className="fw-panel"><SectionHeader eyebrow="AUTHENTICATION & IDENTITY GATEWAYS" title="Configured Auth Providers" action={<span className="fw-chip">{authProviders.length} PROVIDERS</span>} /><div className="space-y-3">{authProviders.length ? authProviders.map(provider=><div key={provider.provider} className="fw-auth-row"><div><strong>{provider.display_name}</strong><span>{provider.provider} · {provider.health}</span></div><span className="fw-state">{provider.enabled?'ENABLED':'DISABLED'}</span></div>) : <div className="fw-callout">No authentication provider registry data available.</div>}</div></div>
+          <div className="fw-panel"><SectionHeader eyebrow="PRIVATE STORAGE PROVIDERS" title="Capacity and Failover Registry" action={<span className="fw-chip">{storageProviders.length} PROVIDERS</span>} /><div className="space-y-3">{storageProviders.length ? storageProviders.map(provider=><div key={provider.provider} className="fw-auth-row"><div><strong>{provider.display_name}</strong><span>{provider.provider} · {provider.health}</span></div><span className="fw-state">{provider.enabled?'ENABLED':'DISABLED'}</span></div>) : <div className="fw-callout">No storage provider registry data available.</div>}</div></div>
         </div>
         {selectedProvider && <div className="fw-modal-backdrop"><div className="fw-modal"><div className="fw-eyebrow">FERNET-AES-256 · SERVER-SIDE APPLICATION LAYER</div><h3>{selectedProvider.configured ? 'Rotate' : 'Configure'} {selectedProvider.name}</h3><p>Raw credentials are submitted only over the authenticated admin channel and encrypted server-side before persistence.</p><input type="password" autoFocus value={keyValue} onChange={e=>setKeyValue(e.target.value)} placeholder="Paste provider API key"/><div className="flex justify-end gap-2"><button className="fw-btn fw-btn-secondary" onClick={()=>setSelectedProvider(null)}>CANCEL</button><button className="fw-btn fw-btn-primary" disabled={busyAction.startsWith('provider:') || !keyValue.trim()} onClick={updateProviderKey}>{busyAction.startsWith('provider:')?'SAVING…':'SAVE ENCRYPTED KEY'}</button></div></div></div>}
       </section>}
