@@ -62,3 +62,8 @@ Production requests receive correlation IDs and security headers. AI usage is re
 AI, storage and authentication provider configuration is controlled through authenticated system-admin APIs. Provider credentials are encrypted before persistence and responses contain only masked/configured metadata. Model discovery and connection tests return capability and health metadata without returning secrets. The provider router treats external responses as untrusted and keeps deterministic policy above model output.
 
 External identity subjects are stored in `auth_identity_mappings` and never replace the canonical Formwise user ID. Authentication fallback is intended only for infrastructure availability; invalid credentials must not be blindly retried against another provider. Sensitive form controls, OTP, CAPTCHA, legal declarations, payment confirmation and final submission remain human-controlled.
+
+
+## Final control-plane safeguards
+
+Admin dashboards do not display fabricated conversion, revenue, fraud, or refund rows. Operational actions are server-authorized; refund execution requires a short-lived database-backed preview and explicit confirmation. Storage and authentication provider test endpoints return only health metadata. Provider credentials remain encrypted and are never returned by normal GET responses.

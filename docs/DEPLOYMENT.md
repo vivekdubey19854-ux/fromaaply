@@ -26,3 +26,8 @@ Real PostgreSQL, Redis, object-storage, email, AI, and Razorpay credentials are 
 After applying migrations through `0016_unified_provider_control_plane`, system administrators configure AI, OmniRoute, storage and authentication providers through authenticated Admin APIs. The deployment environment must provide `FORMWISE_CREDENTIAL_ENCRYPTION_KEY`; provider secrets are submitted only over the protected Admin API and are encrypted before database storage. Do not place provider keys in Git, frontend bundles or ordinary environment templates.
 
 The first deployment should configure at least one direct AI provider and one private storage provider before enabling user workflows. OmniRoute is optional. Provider test and model-discovery endpoints report real reachability only after making the external request; unavailable credentials remain an explicit unavailable/configuration-error state.
+
+
+## Final operational configuration
+
+Apply migration `0018_platform_control_plane` before enabling branding or marketing controls. Configure storage-provider credentials through the authenticated admin endpoints, then run the provider probe before enabling failover. Configure PostgreSQL, Redis, browser, AI, authentication, payment, email, and SMS credentials outside Git; this repository does not claim live external-provider validation without those credentials.

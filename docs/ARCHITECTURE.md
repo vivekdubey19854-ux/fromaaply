@@ -127,3 +127,8 @@ The `ai_provider_registry` and `ai_model_registry` tables define provider capabi
 `storage_provider_registry` provides an encrypted, private provider registry for Oracle, Cloudflare R2, Backblaze B2, Firebase and Supabase. The storage adapter keeps primary-plus-failover semantics and does not replicate objects without an explicit policy. `auth_provider_registry` and `auth_identity_mappings` separate external authentication subjects from the canonical Formwise user identity.
 
 The Admin control plane is the server-authoritative configuration boundary for these registries. It exposes masked metadata only, writes credentials through encrypted storage, and requires system-admin authorization for every mutation.
+
+
+## Final control-plane additions
+
+The admin control plane now reads operational summaries from PostgreSQL, including task, worker lease, payment, refund, storage, website, and AI usage data. Platform branding is persisted in `platform_settings`; marketing analytics and message generation are draft-only and based on database counts. Storage health probes use private bucket access and never return credentials. High-risk refunds remain behind a persisted preview and explicit confirmation.

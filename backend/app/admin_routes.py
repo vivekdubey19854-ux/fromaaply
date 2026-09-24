@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -19,6 +20,7 @@ from .database import get_db
 from .payment_service import PaymentService
 from .website_health_service import WebsiteHealthService
 from .ai_provider_adapter import PROVIDER_CATALOG
+from .storage_service import StorageServiceAdapter
 
 router = APIRouter(prefix="/v1/admin", tags=["super-admin"])
 
@@ -357,8 +359,11 @@ def admin_summary(db: Session = Depends(get_db), admin: AdminContext = Depends(r
 
 @router.get("/users")
 def admin_users(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> list[dict[str, Any]]:
-    from .db_models import AuthUserRecord
-    return [{"user_id": row.user_id, "email": row.email, "status": row.status, "role": row.role, "created_at": row.created_at.isoformat() if row.created_at else None, "last_login_at": row.last_login_at.isoformat() if row.last_login_at else None} for row in db.scalars(select(AuthUserRecord).order_by(AuthUserRecord.created_at.desc()).limit(500)).all()]
+    rows = db.execute(text("""SELECT u.user_id,u.email,u.status,u.role,u.created_at,u.last_login_at,w.balance_credits,
+        (SELECT t.transaction_id FROM transactions t WHERE t.user_id=u.user_id ORDER BY t.created_at DESC LIMIT 1) AS last_transaction_id,
+        (SELECT t.status FROM transactions t WHERE t.user_id=u.user_id ORDER BY t.created_at DESC LIMIT 1) AS last_transaction_status
+        FROM auth_users u LEFT JOIN user_wallets w ON w.user_id=u.user_id ORDER BY u.created_at DESC LIMIT 500""")).mappings().all()
+    return [{"user_id": row["user_id"], "email": row["email"], "status": row["status"], "role": row["role"], "credits": str(row["balance_credits"] or 0), "last_transaction_id": row["last_transaction_id"], "last_transaction_status": row["last_transaction_status"], "created_at": row["created_at"].isoformat() if row["created_at"] else None, "last_login_at": row["last_login_at"].isoformat() if row["last_login_at"] else None} for row in rows]
 
 
 @router.get("/ai-usage")
@@ -472,9 +477,26 @@ def admin_assistant_query(body: AdminAssistantRequest, db: Session = Depends(get
     from .db_models import AIUsageLedgerRecord, AuthUserRecord, BrowserSessionRecord, FormTaskRecord
     q = body.query.lower()
     summary = {"users": int(db.scalar(select(func.count()).select_from(AuthUserRecord)) or 0), "tasks": int(db.scalar(select(func.count()).select_from(FormTaskRecord)) or 0), "browser_sessions": int(db.scalar(select(func.count()).select_from(BrowserSessionRecord)) or 0), "ai_calls": int(db.scalar(select(func.count()).select_from(AIUsageLedgerRecord)) or 0)}
+    summary["failed_tasks"] = int(db.scalar(select(func.count()).select_from(FormTaskRecord).where(FormTaskRecord.state == "failed")) or 0)
+    summary["queued_tasks"] = int(db.scalar(select(func.count()).select_from(FormTaskRecord).where(FormTaskRecord.state == "queued")) or 0)
+    summary["running_tasks"] = int(db.scalar(select(func.count()).select_from(FormTaskRecord).where(FormTaskRecord.state == "running")) or 0)
+    summary["payment_transactions"] = int(db.execute(text("SELECT COUNT(*) FROM transactions")).scalar() or 0)
+    summary["successful_payments"] = int(db.execute(text("SELECT COUNT(*) FROM transactions WHERE status='SUCCESS'")).scalar() or 0)
+    summary["refund_requests"] = int(db.execute(text("SELECT COUNT(*) FROM payment_refunds WHERE status IN ('REQUESTED','SUCCESS')")).scalar() or 0)
+    summary["healthy_websites"] = int(db.execute(text("SELECT COUNT(*) FROM website_registry WHERE health_status='healthy' AND enabled=true")).scalar() or 0)
+    summary["storage_providers"] = int(db.execute(text("SELECT COUNT(*) FROM storage_provider_registry WHERE enabled=true")).scalar() or 0)
+    summary["healthy_storage_providers"] = int(db.execute(text("SELECT COUNT(*) FROM storage_provider_registry WHERE enabled=true AND health='healthy'")).scalar() or 0)
     if "failure" in q or "failed" in q:
-        summary["failed_tasks"] = int(db.scalar(select(func.count()).select_from(FormTaskRecord).where(FormTaskRecord.state == "failed")) or 0)
-    return {"mode": "read_only", "answer": "Operational data was queried from the database; no action was executed.", "summary": summary, "requested_by": admin.user_id}
+        answer = f"There are {summary['failed_tasks']} failed tasks, {summary['queued_tasks']} queued tasks, and {summary['running_tasks']} running tasks."
+    elif "payment" in q or "refund" in q:
+        answer = f"The ledger contains {summary['payment_transactions']} transactions, {summary['successful_payments']} successful payments, and {summary['refund_requests']} refund requests."
+    elif "storage" in q:
+        answer = f"{summary['healthy_storage_providers']} of {summary['storage_providers']} enabled storage providers report healthy status."
+    elif "website" in q:
+        answer = f"{summary['healthy_websites']} enabled websites currently report healthy status."
+    else:
+        answer = "Operational data was queried from PostgreSQL; no action was executed."
+    return {"mode": "read_only", "answer": answer, "summary": summary, "requested_by": admin.user_id}
 
 
 class AdminActionPreviewRequest(BaseModel):
@@ -677,3 +699,92 @@ def discover_provider_models(provider: str, db: Session = Depends(get_db), admin
     except Exception as exc:
         raise HTTPException(status_code=502, detail="provider model discovery failed") from exc
     return {"provider": provider.strip().lower(), "models": models, "count": len(models)}
+
+
+@router.post("/storage/providers/{provider}/test")
+def test_storage_provider(provider: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    """Perform a real private bucket probe without returning credentials or provider payloads."""
+    provider = provider.strip().lower()
+    row = db.execute(text("SELECT provider,endpoint,bucket,region,credentials_encrypted,enabled FROM storage_provider_registry WHERE provider=:provider"), {"provider": provider}).mappings().first()
+    if not row or not row["enabled"] or not row["credentials_encrypted"]:
+        return {"provider": provider, "configured": False, "reachable": False, "health": "configuration_error"}
+    started = time.monotonic()
+    try:
+        from .credential_crypto import decrypt_admin_api_key
+        credentials = json.loads(decrypt_admin_api_key(row["credentials_encrypted"]))
+        credentials.update({"endpoint_url": row["endpoint"], "bucket_name": row["bucket"], "region_name": row["region"]})
+        client = StorageServiceAdapter(db)._client(__import__("app.storage_service", fromlist=["StorageNode"]).StorageNode(provider, provider, str(row["bucket"] or ""), 1, "UP", credentials))
+        client.head_bucket(Bucket=row["bucket"])
+        db.execute(text("UPDATE storage_provider_registry SET health='healthy',last_test_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE provider=:provider"), {"provider": provider})
+        db.commit()
+        return {"provider": provider, "configured": True, "reachable": True, "health": "healthy", "latency_ms": int((time.monotonic() - started) * 1000)}
+    except Exception:
+        db.rollback()
+        db.execute(text("UPDATE storage_provider_registry SET health='unavailable',last_test_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE provider=:provider"), {"provider": provider})
+        db.commit()
+        return {"provider": provider, "configured": True, "reachable": False, "health": "unavailable"}
+
+
+@router.post("/auth/providers/{provider}/test")
+def test_auth_provider(provider: str, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    row = db.execute(text("SELECT provider,enabled,credentials_encrypted,authorize_url,token_url,otp_request_url,otp_verify_url FROM auth_provider_registry WHERE provider=:provider"), {"provider": provider}).mappings().first()
+    configured = bool(row and row["credentials_encrypted"])
+    healthy = bool(row and row["enabled"] and configured and ((row["authorize_url"] and row["token_url"]) or (row["otp_request_url"] and row["otp_verify_url"])))
+    db.execute(text("UPDATE auth_provider_registry SET health=:health,last_test_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE provider=:provider"), {"provider": provider, "health": "healthy" if healthy else "configuration_error"})
+    db.commit()
+    return {"provider": provider, "configured": configured, "reachable": healthy, "health": "healthy" if healthy else "configuration_error"}
+
+
+@router.get("/workers")
+def admin_workers(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    rows = db.execute(text("SELECT owner_id,COUNT(*) AS leases,MIN(locked_until) AS earliest_expiry FROM task_locks GROUP BY owner_id ORDER BY owner_id")).mappings().all()
+    queued = db.execute(text("SELECT COUNT(*) FROM form_tasks WHERE state='queued'")).scalar() or 0
+    running = db.execute(text("SELECT COUNT(*) FROM form_tasks WHERE state='running'")).scalar() or 0
+    return {"workers": [dict(row) for row in rows], "queued": int(queued), "running": int(running), "checked_at": datetime.utcnow().isoformat()}
+
+
+@router.get("/branding")
+def get_branding(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    row = db.execute(text("SELECT setting_value_json FROM platform_settings WHERE setting_key='branding'")).scalar()
+    return json.loads(row or "{}")
+
+
+class BrandingRequest(BaseModel):
+    site_name: str = Field(default="Formwise", max_length=120)
+    logo_url: str | None = Field(default=None, max_length=500)
+    favicon_url: str | None = Field(default=None, max_length=500)
+    primary_color: str = Field(default="#62f6a3", max_length=20)
+    footer_company: str | None = Field(default=None, max_length=240)
+    seo_title: str | None = Field(default=None, max_length=180)
+    seo_description: str | None = Field(default=None, max_length=320)
+
+
+@router.put("/branding")
+def update_branding(body: BrandingRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    value = json.dumps(body.model_dump(), sort_keys=True)
+    db.execute(text("INSERT INTO platform_settings(setting_key,setting_value_json,updated_by,updated_at) VALUES ('branding',:value,:admin,CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value_json=:value,updated_by=:admin,updated_at=CURRENT_TIMESTAMP"), {"value": value, "admin": admin.user_id})
+    db.commit()
+    return body.model_dump()
+
+
+@router.get("/marketing/insights")
+def marketing_insights(db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    users = int(db.execute(text("SELECT COUNT(*) FROM auth_users")).scalar() or 0)
+    new_users = int(db.execute(text("SELECT COUNT(*) FROM auth_users WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'")).scalar() or 0)
+    active_users = int(db.execute(text("SELECT COUNT(*) FROM auth_users WHERE last_login_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'")).scalar() or 0)
+    tasks = int(db.execute(text("SELECT COUNT(*) FROM form_tasks WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'")).scalar() or 0)
+    return {"users": users, "new_users_30d": new_users, "active_users_30d": active_users, "tasks_30d": tasks, "generated_at": datetime.utcnow().isoformat(), "outbound_actions": "disabled_until_preview_and_confirmation"}
+
+
+class MarketingDraftRequest(BaseModel):
+    audience: str = Field(min_length=1, max_length=80)
+    channel: str = Field(pattern="^(email|sms|notification)$")
+    objective: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/marketing/drafts")
+def create_marketing_draft(body: MarketingDraftRequest, db: Session = Depends(get_db), admin: AdminContext = Depends(require_system_admin)) -> dict[str, Any]:
+    insights = marketing_insights(db, admin)
+    draft = {"audience": body.audience, "channel": body.channel, "objective": body.objective, "copy": f"Formwise update for {body.audience}: {body.objective}", "data_basis": {"active_users_30d": insights["active_users_30d"], "new_users_30d": insights["new_users_30d"]}, "status": "DRAFT_ONLY", "requires_confirmation": True}
+    return draft

@@ -3,7 +3,7 @@ import './admin-dashboard.css';
 
 type AdminTab = 'cockpit' | 'vault' | 'growth';
 type Provider = { name: string; short: string; tier: string; masked: string; latency: string; configured: boolean };
-type UserRow = { id: string; name: string; plan: string; credits: number; status: string; spend: string; lastJob: string };
+type UserRow = { id: string; name: string; plan: string; credits: number; status: string; spend: string; lastJob: string; lastTransactionId?: string; lastTransactionStatus?: string };
 type AdminSummary = { users:number; websites:number; enabled_websites:number; audit_events:number; tasks?:number; browser_sessions?:number; ai_usage?:number };
 type ProviderPolicy = { provider:string; priority:number; enabled:boolean; status?:string; error_rate?:string };
 type WebsiteHealth = { website_id:string; name:string; verified:boolean; enabled:boolean; health_status:string; version:string };
@@ -79,14 +79,15 @@ export default function AdminDashboard() {
   const [pricing, setPricing] = useState({ credits:'1', formCost:'3', refund:'5', discount:'15' });
   const [authEnabled, setAuthEnabled] = useState(AUTH_GATEWAYS.map(x => Boolean(x[2])));
   const [bannerEnabled, setBannerEnabled] = useState(true);
-  const [bannerUrl, setBannerUrl] = useState('https://cdn.formwise.ai/banner/enterprise-top.webp');
-  const [bannerLink, setBannerLink] = useState('https://formwise.ai/upgrade');
-  const [coupon, setCoupon] = useState({ code:'LAUNCH50', type:'percentage', value:'50', maxUses:'2000', expiry:'2026-11-30' });
+  const [bannerUrl, setBannerUrl] = useState('');
+  const [bannerLink, setBannerLink] = useState('');
+  const [coupon, setCoupon] = useState({ code:'', type:'percentage', value:'', maxUses:'', expiry:'' });
   const [referee, setReferee] = useState(20);
   const [referrer, setReferrer] = useState(10);
-  const [refundSearch, setRefundSearch] = useState('USR-92105');
+  const [refundSearch, setRefundSearch] = useState('');
   const [refundState, setRefundState] = useState<'idle'|'success'|'error'>('idle');
   const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [marketingInsights, setMarketingInsights] = useState<{users:number;new_users_30d:number;active_users_30d:number;tasks_30d:number} | null>(null);
   const [aiUsage, setAiUsage] = useState<{total_tokens:number; total_cost:string}>({total_tokens:0, total_cost:'0'});
   const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy[]>([]);
   const [websites, setWebsites] = useState<WebsiteHealth[]>([]);
@@ -103,21 +104,23 @@ export default function AdminDashboard() {
     Promise.all([
       adminRequest<AdminSummary>('/v1/admin/summary'),
       adminRequest<{records:unknown[]; total_tokens:number; total_cost:string}>('/v1/admin/ai-usage'),
-      adminRequest<Array<{user_id:string; email:string; status:string; role:string}>>('/v1/admin/users'),
+      adminRequest<Array<{user_id:string; email:string; status:string; role:string; credits?:string; last_transaction_id?:string; last_transaction_status?:string}>>('/v1/admin/users'),
       adminRequest<ProviderPolicy[]>('/v1/admin/provider-policy'),
       adminRequest<WebsiteHealth[]>('/v1/admin/websites'),
       adminRequest<LiveProvider[]>('/v1/admin/providers'),
       adminRequest<Array<{provider:string;display_name:string;health:string;enabled:boolean}>>('/v1/admin/storage/providers'),
       adminRequest<Array<{provider:string;display_name:string;health:string;enabled:boolean}>>('/v1/admin/auth/providers'),
-    ]).then(([liveSummary, liveUsage, liveUsers, livePolicy, liveWebsites, liveAIProviders, liveStorageProviders, liveAuthProviders]) => {
+      adminRequest<{users:number;new_users_30d:number;active_users_30d:number;tasks_30d:number}>('/v1/admin/marketing/insights'),
+    ]).then(([liveSummary, liveUsage, liveUsers, livePolicy, liveWebsites, liveAIProviders, liveStorageProviders, liveAuthProviders, liveMarketing]) => {
       setSummary(liveSummary);
       setAiUsage({total_tokens: liveUsage.total_tokens, total_cost: liveUsage.total_cost});
-      setUsers(liveUsers.map(user => ({id:user.user_id, name:user.email, plan:user.role, credits:0, status:user.status, spend:'—', lastJob:'—'})));
+      setUsers(liveUsers.map(user => ({id:user.user_id, name:user.email, plan:user.role, credits:Number(user.credits || 0), status:user.status, spend:'—', lastJob:user.last_transaction_status || '—', lastTransactionId:user.last_transaction_id, lastTransactionStatus:user.last_transaction_status})));
       setProviderPolicy(livePolicy);
       setWebsites(liveWebsites);
       setLiveProviders(liveAIProviders);
       setStorageProviders(liveStorageProviders);
       setAuthProviders(liveAuthProviders);
+      setMarketingInsights(liveMarketing);
       setProviders(liveAIProviders.map(item => ({name:item.display_name || item.provider, short:item.provider.slice(0,2).toUpperCase(), tier:item.status || 'unconfigured', masked:item.configured ? '•••• configured' : '', latency:'—', configured:item.configured})));
       setStatus('LIVE DATABASE TELEMETRY CONNECTED');
     }).catch(error => setStatus(error instanceof Error ? error.message : 'Admin telemetry unavailable.'));
@@ -172,10 +175,12 @@ export default function AdminDashboard() {
   const triggerRefund = async (user:UserRow) => {
     setBusyAction(`refund:${user.id}`);
     try {
-      await adminRequest('/v1/admin/refunds', { method:'POST', body:JSON.stringify({ user_id:user.id, credits:25, reason:'Failed form-fill job' }) });
-      setUsers(items => items.map(item => item.id === user.id ? { ...item, credits:item.credits + 25 } : item));
+      if (!user.lastTransactionId) throw new Error('No refundable transaction is recorded for this user.');
+      if (!window.confirm(`Create and confirm a refund for transaction ${user.lastTransactionId}?`)) return;
+      const preview = await adminRequest<{preview_id:string}>('/v1/admin/assistant/preview', { method:'POST', body:JSON.stringify({action:'refund', payload:{transaction_id:user.lastTransactionId, reason:'Admin-confirmed failed transaction refund'}}) });
+      await adminRequest(`/v1/admin/assistant/confirm/${encodeURIComponent(preview.preview_id)}`, { method:'POST' });
       setRefundState('success');
-      pushLog(`CO-PILOT: ✓ Instant refund +25 cr issued for ${user.id}.`);
+      pushLog(`CO-PILOT: ✓ Refund confirmed for transaction ${user.lastTransactionId}.`);
       setStatus(`Refund issued to ${user.name}.`);
     } catch (error) { setRefundState('error'); setStatus(error instanceof Error ? error.message : 'Refund request failed.'); }
     finally { setBusyAction(''); }
@@ -273,8 +278,8 @@ export default function AdminDashboard() {
       {tab === 'growth' && <section className="grid gap-5 xl:grid-cols-2">
         <div className="fw-panel"><SectionHeader eyebrow="SMART ADVERTISING SYSTEM & BANNER STUDIO" title="SSR Zero-CLS Banner Controller" action={<Toggle checked={bannerEnabled} onChange={setBannerEnabled}/>} /><div className={`fw-banner-fields ${bannerEnabled ? 'is-open':''}`}><label>GLOBAL HEADER BANNER ASSET URL<input value={bannerUrl} onChange={e=>setBannerUrl(e.target.value)}/></label><label>TARGET REDIRECT URL<input value={bannerLink} onChange={e=>setBannerLink(e.target.value)}/></label><div className="fw-banner-preview"><div className="fw-banner-image" style={{backgroundImage:`url(${bannerUrl})`}}><span>1200 × 90 · LIVE PREVIEW</span></div></div><p>Telemetry guarantee: disabling the banner removes the grid track itself, leaving no padding, margin, spacer, or reserved min-height.</p><div className="flex gap-2"><button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: ✓ In-app banner render test requested.')}>TEST IN-APP RENDER</button><button className="fw-btn fw-btn-primary" onClick={()=>pushLog(`CO-PILOT: ✓ Banner broadcast staged → ${bannerLink}`)}>SAVE & BROADCAST</button></div></div></div>
         <div className="fw-panel"><SectionHeader eyebrow="COUPON CODE ENGINE & PROMO GENERATOR" title="Deterministic Discount Ledger" action={<span className="fw-state">LIVE REDEMPTIONS · 3 ACTIVE</span>} /><div className="grid gap-3 sm:grid-cols-2"><label>CODE<input value={coupon.code} onChange={e=>setCoupon({...coupon,code:e.target.value.toUpperCase()})}/></label><label>REWARD TYPE<select value={coupon.type} onChange={e=>setCoupon({...coupon,type:e.target.value})}><option value="percentage">Percentage (%)</option><option value="fixed">Fixed INR Amount (₹)</option><option value="credits">Free Wallet Credits</option></select></label><label>REWARD VALUE<input type="number" min="0" value={coupon.value} onChange={e=>setCoupon({...coupon,value:e.target.value})}/></label><label>MAX REDEMPTIONS<input type="number" min="1" value={coupon.maxUses} onChange={e=>setCoupon({...coupon,maxUses:e.target.value})}/></label><label className="sm:col-span-2">EXPIRY DATE<input type="date" value={coupon.expiry} onChange={e=>setCoupon({...coupon,expiry:e.target.value})}/></label></div><div className="fw-promo-actions"><button className="fw-btn fw-btn-primary" disabled={busyAction==='coupon'} onClick={deployCoupon}>{busyAction==='coupon'?'DEPLOYING…':'⚡ GENERATE & DEPLOY CODE'}</button><div className="fw-chip">HASH · 0x99F_PROMO</div></div></div>
-        <div className="fw-panel"><SectionHeader eyebrow="VIRAL REFERRAL GROWTH LOOP" title="K-Factor · 1.42×" action={<button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: ✓ Referral rules staged for deterministic review.')}>UPDATE LOGIC</button>} /><div className="fw-slider-row"><div><span>Referee Welcome Bonus</span><strong>{referee} Credits</strong></div><input type="range" min="5" max="100" step="5" value={referee} onChange={e=>setReferee(Number(e.target.value))}/><small>5 cr → 100 cr</small></div><div className="fw-slider-row"><div><span>Referrer Claimable Payout</span><strong>{referrer} Credits</strong></div><input type="range" min="0" max="50" step="5" value={referrer} onChange={e=>setReferrer(Number(e.target.value))}/><small>0 cr → 50 cr</small></div><div className="grid grid-cols-3 gap-3 pt-4"><div className="fw-mini-stat"><span>Converted</span><strong>4,820</strong></div><div className="fw-mini-stat"><span>Attributed ARR</span><strong>₹2,41,000</strong></div><div className="fw-mini-stat"><span>Fraud Drop</span><strong>0.04%</strong></div></div><div className="fw-defense">DEVICE FINGERPRINT + SMS ENCLAVE BINDING · STRICT ENFORCEMENT · 30D WINDOW</div></div>
-        <div className="fw-panel"><SectionHeader eyebrow="DISPUTE & CREDIT REFUND CONTROLLER" title="Instant Wallet Rollback" action={<span className="fw-chip">ZERO-WAIT ROLLBACK</span>} /><div className="fw-refund-search"><input value={refundSearch} onChange={e=>setRefundSearch(e.target.value.toUpperCase())} placeholder="Lookup user ID"/><button className="fw-btn fw-btn-secondary" onClick={()=>setRefundState('idle')}>LOOKUP</button></div><div className="fw-dispute-card"><div><span>{selectedUser.id} · {selectedUser.name}</span><strong>FAILED (504 TIMEOUT)</strong><small>Target Form: {selectedUser.lastJob}</small></div><div className="fw-credit-reversal">-25 Compute Credits</div><button disabled={busyAction.startsWith('refund:')} className="fw-btn fw-btn-danger" onClick={()=>triggerRefund(selectedUser)}>{busyAction.startsWith('refund:')?'ROLLING BACK…':'↩ TRIGGER INSTANT CREDIT REFUND (+25 cr)'}</button></div>{refundState==='success'&&<div className="fw-callout success">REFUND CONFIRMED · wallet balance and audit ledger updated.</div>}{refundState==='error'&&<div className="fw-callout error">REFUND REQUEST FAILED · verify admin credentials and backend entitlement.</div>}<div className="fw-recent-refunds"><div><span>USR-84192</span><b>USCIS I-9 Form Upload</b><em>REFUNDED (+25 cr)</em></div><div><span>USR-77319</span><b>IRS Tax Stamp Verification</b><em>REFUNDED (+15 cr)</em></div></div></div>
+        <div className="fw-panel"><SectionHeader eyebrow="VIRAL REFERRAL GROWTH LOOP" title="Referral Configuration" action={<button className="fw-btn fw-btn-secondary" onClick={()=>pushLog('CO-PILOT: ✓ Referral rules staged for deterministic review.')}>UPDATE LOGIC</button>} /><div className="fw-slider-row"><div><span>Referee Welcome Bonus</span><strong>{referee} Credits</strong></div><input type="range" min="5" max="100" step="5" value={referee} onChange={e=>setReferee(Number(e.target.value))}/><small>5 cr → 100 cr</small></div><div className="fw-slider-row"><div><span>Referrer Claimable Payout</span><strong>{referrer} Credits</strong></div><input type="range" min="0" max="50" step="5" value={referrer} onChange={e=>setReferrer(Number(e.target.value))}/><small>0 cr → 50 cr</small></div><div className="fw-callout">Live audience data: {marketingInsights ? `${marketingInsights.active_users_30d} active users, ${marketingInsights.new_users_30d} new users and ${marketingInsights.tasks_30d} tasks in the last 30 days.` : 'Waiting for marketing insights API.'}</div></div>
+        <div className="fw-panel"><SectionHeader eyebrow="DISPUTE & CREDIT REFUND CONTROLLER" title="Instant Wallet Rollback" action={<span className="fw-chip">ZERO-WAIT ROLLBACK</span>} /><div className="fw-refund-search"><input value={refundSearch} onChange={e=>setRefundSearch(e.target.value.toUpperCase())} placeholder="Lookup user ID"/><button className="fw-btn fw-btn-secondary" onClick={()=>setRefundState('idle')}>LOOKUP</button></div><div className="fw-dispute-card"><div><span>{selectedUser.id} · {selectedUser.name}</span><strong>FAILED (504 TIMEOUT)</strong><small>Target Form: {selectedUser.lastJob}</small></div><div className="fw-credit-reversal">-25 Compute Credits</div><button disabled={busyAction.startsWith('refund:')} className="fw-btn fw-btn-danger" onClick={()=>triggerRefund(selectedUser)}>{busyAction.startsWith('refund:')?'ROLLING BACK…':'↩ TRIGGER INSTANT CREDIT REFUND (+25 cr)'}</button></div>{refundState==='success'&&<div className="fw-callout success">REFUND CONFIRMED · wallet balance and audit ledger updated.</div>}{refundState==='error'&&<div className="fw-callout error">REFUND REQUEST FAILED · verify admin credentials and backend entitlement.</div>}<div className="fw-callout">Refund history is loaded from the payment ledger; no synthetic refund rows are displayed.</div></div>
       </section>}
 
       <div className="fw-bottom-status"><span><i /> {status}</span><span>SERVER-AUTHORITATIVE SAFEGUARDS · ZERO-PLAINTEXT TELEMETRY</span></div>

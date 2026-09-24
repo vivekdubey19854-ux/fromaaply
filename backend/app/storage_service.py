@@ -54,7 +54,7 @@ class StorageServiceAdapter:
                 break
             try:
                 return self._upload_to_node(node, object_key, bytes(data), content_type, checksum_sha256, deadline)
-            except NETWORK_ERRORS + (BotoCoreError, ClientError) as exc:
+            except NETWORK_ERRORS + (BotoCoreError, ClientError, StorageUploadError) as exc:
                 failures.append(exc)
                 self._mark_down(node.node_id)
         raise StorageUploadError("all configured storage nodes failed or timed out") from (failures[-1] if failures else None)
@@ -66,7 +66,7 @@ class StorageServiceAdapter:
             try:
                 client = self._client(node)
                 return client.get_object(Bucket=node.bucket_name, Key=object_key)["Body"].read()
-            except NETWORK_ERRORS + (BotoCoreError, ClientError) as exc:
+            except NETWORK_ERRORS + (BotoCoreError, ClientError, StorageUploadError) as exc:
                 failures.append(exc)
         raise StorageUploadError("no healthy storage node could download the object") from (failures[-1] if failures else None)
 
@@ -77,7 +77,7 @@ class StorageServiceAdapter:
             try:
                 self._client(node).delete_object(Bucket=node.bucket_name, Key=object_key)
                 return
-            except NETWORK_ERRORS + (BotoCoreError, ClientError) as exc:
+            except NETWORK_ERRORS + (BotoCoreError, ClientError, StorageUploadError) as exc:
                 failures.append(exc)
         if failures:
             raise StorageUploadError("no healthy storage node could delete the object") from failures[-1]
@@ -90,7 +90,7 @@ class StorageServiceAdapter:
         for node in self._lock_active_nodes():
             try:
                 return str(self._client(node).generate_presigned_url("get_object", Params={"Bucket": node.bucket_name, "Key": object_key}, ExpiresIn=expires_seconds))
-            except NETWORK_ERRORS + (BotoCoreError, ClientError) as exc:
+            except NETWORK_ERRORS + (BotoCoreError, ClientError, StorageUploadError) as exc:
                 failures.append(exc)
         raise StorageUploadError("no healthy storage node could create a signed URL") from (failures[-1] if failures else None)
 

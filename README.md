@@ -58,3 +58,8 @@ The control plane also supports private storage provider records for Oracle Obje
 Authentication configuration includes Firebase, Supabase, Clerk, Stytch and Descope provider records. The public authentication capability endpoint exposes only enabled login methods; provider secrets never leave the server. The canonical Formwise user remains the application identity, while external identity mappings are stored separately.
 
 System-admin APIs under `/v1/admin` manage AI provider policy and credentials, model discovery, storage capacity and credentials, authentication provider methods, provider tests, health, priority and fallback order. All configuration changes require server-side admin authorization and secrets are masked in responses.
+
+
+## Final operational control plane
+
+The final code pass adds durable platform branding settings, database-backed marketing insights and draft-only campaign generation, worker lease summaries, real storage and authentication provider probes, expanded read-only Admin AI operational summaries, and preview-confirm enforcement for refunds. Dashboards do not display fabricated operational metrics. Staging credentials are still required for real external-provider and infrastructure validation.

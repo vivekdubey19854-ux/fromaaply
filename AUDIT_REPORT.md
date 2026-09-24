@@ -102,3 +102,12 @@ The authentication layer now supports durable email/password sessions, refresh r
 Provider routing falls back only on provider outage or timeout. Invalid passwords, OTP codes, OAuth codes and external identity tokens fail immediately without trying another provider. Admin APIs manage provider credentials, OAuth/JWKS/OTP endpoints, enablement, priority, fallback methods and configuration while returning masked metadata only. Production dev-token issuance remains disabled.
 
 The repository implementation is credential-ready. Real Google, Firebase, Supabase, Clerk, Stytch, Descope and SMS-provider credentials plus redirect URLs must still be configured in staging before external end-to-end smoke testing.
+
+
+## Final end-to-end completion pass — 2026-09-24
+
+Implemented in this pass: durable platform settings for branding, real marketing insight and draft APIs, read-only Admin AI summaries across users/tasks/payments/refunds/storage/websites, worker lease summaries, real storage-provider bucket probes, authentication-provider configuration probes, storage failover on configuration errors, and confirmation-gated refund execution in the admin UI. Synthetic referral, banner, and refund-history metrics are no longer presented as live operational data.
+
+Locally tested: 152 backend tests, frontend tests and production build, Python compilation, Alembic head/check, diff validation, and secret scan. Real PostgreSQL/Redis/Playwright and external provider validation remain environment-dependent and are not claimed here.
+
+External validation required: configure provider credentials and execute staging smoke tests for AI, storage, authentication, Razorpay, email/SMS, Redis/PostgreSQL, browser workers, and official portals.
