@@ -24,8 +24,33 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       PYTHONPATH: .
       FORMWISE_ENVIRONMENT: staging
+      FORMWISE_BROWSER_ALLOW_LOCAL_DEMO_TARGET: "true"
+      FORMWISE_BROWSER_DEMO_TARGET_PORT: "5000"
+      FORMWISE_BROWSER_BLOCK_PRIVATE_NETWORKS: "true"
+      FORMWISE_BROWSER_HEADLESS: "true"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Install demo target
+        working-directory: demo-target-site
+        run: npm install --no-audit --no-fund
+      - name: Start demo target
+        working-directory: demo-target-site
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT=5000 npm start > "$RUNNER_TEMP/formwise-demo-validation.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/formwise-demo-validation.pid"
+          for i in {1..40}; do
+            if curl --silent --show-error --fail http://127.0.0.1:5000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'Demo target did not become ready on port 5000.' >&2
+          cat "$RUNNER_TEMP/formwise-demo-validation.log"
+          exit 1
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install -r backend/requirements.txt
@@ -37,7 +62,10 @@ jobs:
       - working-directory: backend
         run: python -m compileall -q app && alembic check
       - run: git diff --check
-      - uses: actions/setup-node@v4
-        with: {node-version: '22'}
       - working-directory: frontend
         run: npm install --no-audit --no-fund && npm test -- --run && npm run build
+      - name: Demo target log
+        if: always()
+        shell: bash
+        run: |
+          test ! -f "$RUNNER_TEMP/formwise-demo-validation.log" || cat "$RUNNER_TEMP/formwise-demo-validation.log"
